@@ -110,6 +110,7 @@ API Key 存储在 VS Code 的 `SecretStorage` 中（macOS 钥匙串 / Windows �
 | `deepseek-copilot.requestHeaders` | `{}` | 聊天补全请求的自定义请求头。[配置说明](https://github.com/Vizards/deepseek-v4-for-copilot/blob/main/docs/settings/request-headers.zh.md) |
 | `deepseek-copilot.maxTokens` | `0` | 最大输出 Token 数（`0` = API 默认值）。可用于成本控制 |
 | `deepseek-copilot.nonStreaming` | `false` | 使用 `stream: false` 非流式请求。模型生成完成后一次返回完整响应，等待期间界面不显示内容 |
+| `deepseek-copilot.filterLeakedMarkers` | `true` | 移除第三方网关泄漏到回复里的控制标记：`<thinking>` 块、独占一行或位于行尾的 `<summary>` 标签、以及 `<\|…\|>`/`<｜…｜>` 特殊 token。围栏代码与行内代码不会被改动，因此 C# 的 `/// <summary>` 注释和 HTML 的 `<details><summary>` 标记会保留 |
 | `deepseek-copilot.modelIdOverrides` | 预填官方 ID 映射 | 各 DeepSeek 模型入口对应的 API 模型 ID。仅在使用模型名不同的兼容第三方 API 时修改 |
 | `deepseek-copilot.debugMode` | `minimal` | 诊断模式：`minimal` 仅上报 token 用量，`metadata` 输出隐私安全日志，`verbose` 将完整请求 dump 和 pipeline snapshot 写入扩展 global storage。完整 dump 可能包含敏感提示词文本、工具定义、文件片段和图片描述。使用 `DeepSeek: 打开请求 Dump 目录` 打开 dump 位置 |
 | `deepseek-copilot.visionModel` | *(自动)* | V4 Flash 和 Pro 使用的视觉代理。自动模式会在可用时选择 Flash Vision Exp；也可通过 `DeepSeek: 配置视觉代理` 改用其他 VS Code 模型或 API 端点 |

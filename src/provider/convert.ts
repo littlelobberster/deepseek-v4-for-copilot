@@ -7,7 +7,7 @@ import type {
 	DeepSeekToolCall,
 } from '../types';
 import { parseFirstReplayMarker } from './replay';
-import { stripThinkingTags as stripLeakedThinkingTags } from './thinking-tags';
+import { stripLeakedMarkers } from './leaked-markers';
 import {
 	isImageDataPart,
 	normalizeToolResult,
@@ -22,7 +22,7 @@ export function convertMessages(
 	messages: readonly vscode.LanguageModelChatRequestMessage[],
 	isThinkingModel: boolean,
 	nativeImageInput: boolean,
-	stripThinkingTags = true,
+	filterMarkers = true,
 ): DeepSeekMessage[] {
 	const result: DeepSeekMessage[] = [];
 
@@ -68,9 +68,9 @@ export function convertMessages(
 		}
 
 		if (role === 'assistant') {
-			// Historical assistant turns may already carry leaked `<thinking>` tags; drop
-			// them so the pollution does not get resent on every following request.
-			const assistantContent = stripThinkingTags ? stripLeakedThinkingTags(content) : content;
+			// Historical assistant turns may already carry leaked gateway markup; drop it so
+			// the pollution does not get resent on every following request.
+			const assistantContent = filterMarkers ? stripLeakedMarkers(content) : content;
 			if (assistantContent || toolCalls.length > 0) {
 				const replayMarker = isThinkingModel ? parseFirstReplayMarker(message) : undefined;
 				const msg: DeepSeekMessage = {
@@ -83,7 +83,7 @@ export function convertMessages(
 				}
 
 				if (isThinkingModel) {
-					msg.reasoning_content = getReasoningContent(replayMarker, thinkingContent);
+					msg.reasoning_content = getReasoningContent(replayMarker, thinkingContent, filterMarkers);
 				}
 
 				result.push(msg);
@@ -158,11 +158,13 @@ function convertToolResultContent(
 function getReasoningContent(
 	replayMarker: ReturnType<typeof parseFirstReplayMarker>,
 	thinkingContent: string,
+	filterMarkers: boolean,
 ): string {
-	if (replayMarker?.valid && replayMarker.reasoningText) {
-		return replayMarker.reasoningText;
-	}
-	return thinkingContent;
+	const reasoning =
+		replayMarker?.valid && replayMarker.reasoningText
+			? replayMarker.reasoningText
+			: thinkingContent;
+	return filterMarkers ? stripLeakedMarkers(reasoning) : reasoning;
 }
 
 function isLanguageModelThinkingPart(part: unknown): part is vscode.LanguageModelThinkingPart {

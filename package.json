@@ -136,9 +136,15 @@
           "default": false,
           "markdownDescription": "%deepseek-copilot.config.nonStreaming.description%"
         },
+        "deepseek-copilot.filterLeakedMarkers": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%deepseek-copilot.config.filterLeakedMarkers.description%"
+        },
         "deepseek-copilot.stripThinkingTags": {
           "type": "boolean",
           "default": true,
+          "deprecationMessage": "%deepseek-copilot.config.stripThinkingTags.deprecation%",
           "markdownDescription": "%deepseek-copilot.config.stripThinkingTags.description%"
         },
         "deepseek-copilot.requestHeaders": {

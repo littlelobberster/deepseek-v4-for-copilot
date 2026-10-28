@@ -9,7 +9,7 @@
 ### Bug Fixes
 
 * **vision:** reuse image descriptions across requests instead of calling the vision model again for every turn when the host does not replay `toolVision` marker metadata
-* **provider:** strip `<thinking>...</thinking>` blocks that third-party gateways leak into the assistant content, both from the live stream and from replayed history (disable with `deepseek-copilot.stripThinkingTags`)
+* **provider:** strip control markup that third-party gateways leak into replies: `<thinking>` blocks, `<summary>` tags that stand alone on a line or end one, and `<|…|>`/`<｜…｜>` special tokens. Fenced code blocks and inline code are never modified, so C# doc comments and HTML `<details><summary>` markup keep working. Controlled by `deepseek-copilot.filterLeakedMarkers` (replaces `stripThinkingTags`, which is still read as a fallback)
 
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 

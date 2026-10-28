@@ -14,7 +14,7 @@ import {
 } from './replay';
 import type { PreparedChatRequest } from './request';
 import { formatRequestLogLine, type RequestKind } from './routing';
-import { createThinkingTagFilter, type ThinkingTagFilter } from './thinking-tags';
+import { createLeakedMarkerFilter, type LeakedMarkerFilter } from './leaked-markers';
 
 interface ResponseStreamState {
 	accumulatedReasoning: string;
@@ -49,7 +49,8 @@ export function streamChatCompletion({
 		replayMarkerReported: false,
 	};
 	const cancelListener = observeCancellationToken(token, prepared.cacheDiagnostics);
-	const thinkingTagFilter = prepared.stripThinkingTags ? createThinkingTagFilter() : undefined;
+	const contentFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
+	const thinkingFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
 
 	const reportContent = (content: string): void => {
 		if (!content) {
@@ -64,12 +65,12 @@ export function streamChatCompletion({
 			prepared.request,
 			{
 				onContent: (content: string) => {
-					reportContent(thinkingTagFilter ? thinkingTagFilter.push(content) : content);
+					reportContent(contentFilter ? contentFilter.push(content) : content);
 				},
 
 				onThinking: (text: string) => {
 					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-					handleThinking(text, state, progress);
+					handleThinking(thinkingFilter ? thinkingFilter.push(text) : text, state, progress);
 				},
 
 				onToolCall: (toolCall: DeepSeekToolCall) => {
@@ -82,8 +83,12 @@ export function streamChatCompletion({
 				},
 
 				onDone: () => {
-					reportContent(thinkingTagFilter?.flush() ?? '');
-					logFilteredThinkingTags(prepared, thinkingTagFilter);
+					reportContent(contentFilter?.flush() ?? '');
+					const trailingThinking = thinkingFilter?.flush() ?? '';
+					if (trailingThinking) {
+						handleThinking(trailingThinking, state, progress);
+					}
+					logStrippedMarkers(prepared, contentFilter, thinkingFilter);
 					reportReplayMarkerOnce(prepared, progress, state, 'done');
 					finalizeReplayDiagnostics(
 						prepared.trailingToolResultIds,
@@ -124,18 +129,20 @@ export function streamChatCompletion({
 		});
 }
 
-function logFilteredThinkingTags(
+function logStrippedMarkers(
 	prepared: PreparedChatRequest,
-	filter: ThinkingTagFilter | undefined,
+	contentFilter: LeakedMarkerFilter | undefined,
+	thinkingFilter: LeakedMarkerFilter | undefined,
 ): void {
-	const strippedChars = filter?.strippedChars() ?? 0;
-	if (strippedChars === 0) {
+	const contentChars = contentFilter?.strippedChars() ?? 0;
+	const thinkingChars = thinkingFilter?.strippedChars() ?? 0;
+	if (contentChars === 0 && thinkingChars === 0) {
 		return;
 	}
 	logger.debug(
 		formatRequestLogLine(
 			prepared.requestKind,
-			`stripped ${strippedChars} chars of <thinking> tags from assistant output`,
+			`stripped leaked markers: content=${contentChars} chars thinking=${thinkingChars} chars`,
 		),
 	);
 }
@@ -242,6 +249,9 @@ function handleThinking(
 	state: ResponseStreamState,
 	progress: vscode.Progress<vscode.LanguageModelResponsePart>,
 ): void {
+	if (!text) {
+		return;
+	}
 	state.accumulatedReasoning += text;
 
 	// LanguageModelThinkingPart is a proposed API; the project root augmentation provides types.

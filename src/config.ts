@@ -53,11 +53,19 @@ export function getNonStreamingEnabled(): boolean {
 }
 
 /**
- * Whether to strip `<thinking>...</thinking>` tags that some OpenAI-compatible
- * gateways leak into the assistant `content` field.
+ * Whether to remove control markup that third-party gateways leak into model output:
+ * `<thinking>` blocks, standalone `<summary>` tags, and `<|…|>`/`<｜…｜>` special tokens.
+ *
+ * The legacy `stripThinkingTags` key is still read as a fallback so existing settings
+ * keep working after the rename.
  */
-export function getStripThinkingTagsEnabled(): boolean {
+export function getFilterLeakedMarkersEnabled(): boolean {
 	const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+	const inspection = config.inspect<boolean>('filterLeakedMarkers');
+	const configured = inspection?.workspaceValue ?? inspection?.globalValue;
+	if (configured !== undefined) {
+		return configured;
+	}
 	return config.get<boolean>('stripThinkingTags', true);
 }
 
