@@ -42,6 +42,17 @@ export function getMaxTokens(): number | undefined {
 }
 
 /**
+ * Whether to request completions without SSE streaming (`stream: false`).
+ *
+ * Non-streaming responses arrive as a single JSON payload after the model
+ * finishes generating, so nothing is rendered until the request completes.
+ */
+export function getNonStreamingEnabled(): boolean {
+	const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+	return config.get<boolean>('nonStreaming', false);
+}
+
+/**
  * Diagnostic mode. `verbose` also enables metadata logs.
  *
  * The legacy boolean `debug` setting is still read as a fallback so old

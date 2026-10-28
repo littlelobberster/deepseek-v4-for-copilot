@@ -1,7 +1,13 @@
 import vscode from 'vscode';
 import { AuthManager } from '../auth';
 import { createApiKeyNotConfiguredError, DeepSeekClient } from '../client';
-import { getApiModelId, getBaseUrl, getMaxTokens, getRequestHeaders } from '../config';
+import {
+	getApiModelId,
+	getBaseUrl,
+	getMaxTokens,
+	getNonStreamingEnabled,
+	getRequestHeaders,
+} from '../config';
 import { MODELS } from '../consts';
 import { isOfficialDeepSeekBaseUrl } from '../endpoint';
 import type { DeepSeekRequest } from '../types';
@@ -98,7 +104,7 @@ export async function prepareChatRequest({
 	const baseRequest: DeepSeekRequest = {
 		model: getApiModelId(modelInfo.id),
 		messages: deepseekMessages,
-		stream: true,
+		stream: !getNonStreamingEnabled(),
 		tools,
 		tool_choice: tools && tools.length > 0 ? ('auto' as const) : undefined,
 		max_tokens: maxTokens,

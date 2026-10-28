@@ -97,6 +97,25 @@ export interface DeepSeekStreamChunk {
 	usage?: DeepSeekUsage;
 }
 
+/** Response body for a non-streaming (`stream: false`) chat completion. */
+export interface DeepSeekCompletionResponse {
+	id: string;
+	object: string;
+	created: number;
+	model: string;
+	choices: Array<{
+		index: number;
+		message: {
+			role?: string;
+			content?: string | null;
+			reasoning_content?: string | null;
+			tool_calls?: DeepSeekToolCall[] | null;
+		};
+		finish_reason: string | null;
+	}>;
+	usage?: DeepSeekUsage;
+}
+
 // ---- Stream callbacks ----
 
 export interface StreamCallbacks {

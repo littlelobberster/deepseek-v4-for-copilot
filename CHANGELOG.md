@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5 (non-streaming fork)
+
+### Features
+
+* add `deepseek-copilot.nonStreaming` setting to send `stream: false` requests and dispatch the full response once
+
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 
 

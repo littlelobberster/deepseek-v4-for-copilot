@@ -3,7 +3,7 @@
   "displayName": "DeepSeek V4 for Copilot Chat",
   "description": "Use DeepSeek V4.1 Flash in Copilot Chat with native vision, Vision Proxy, reasoning, and agent tools.",
   "icon": "resources/icon.png",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "Vizards",
   "license": "MIT",
   "repository": {
@@ -130,6 +130,11 @@
           "default": 0,
           "minimum": 0,
           "description": "%deepseek-copilot.config.maxTokens.description%"
+        },
+        "deepseek-copilot.nonStreaming": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "%deepseek-copilot.config.nonStreaming.description%"
         },
         "deepseek-copilot.requestHeaders": {
           "type": "object",

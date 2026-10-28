@@ -2,6 +2,7 @@ import type { CancellationToken } from 'vscode';
 import { safeStringify } from '../json';
 import { logger } from '../logger';
 import type {
+	DeepSeekCompletionResponse,
 	DeepSeekRequest,
 	DeepSeekStreamChunk,
 	DeepSeekToolCall,
@@ -22,8 +23,10 @@ export class DeepSeekClient {
 	) {}
 
 	/**
-	 * Stream a chat completion from the DeepSeek API.
-	 * Parses SSE chunks and dispatches callbacks for content, thinking, and tool calls.
+	 * Send a chat completion to the DeepSeek API and dispatch the result via `callbacks`.
+	 *
+	 * Streaming requests (`stream: true`) parse SSE chunks incrementally; non-streaming
+	 * requests (`stream: false`) wait for the full JSON response and dispatch it once.
 	 */
 	async streamChatCompletion(
 		request: DeepSeekRequest,
@@ -39,19 +42,18 @@ export class DeepSeekClient {
 		}
 
 		try {
+			if (request.stream === false) {
+				await this.completeChatCompletion(request, callbacks, controller.signal, cancellationToken);
+				return;
+			}
+
 			// Request usage stats in streaming responses so we can calibrate token counting.
 			const requestBody = {
 				...request,
 				stream_options: { include_usage: true },
 			};
 
-			const headers = new Headers({
-				'Content-Type': 'application/json',
-				Authorization: `Bearer ${this.apiKey}`,
-			});
-			for (const [name, value] of Object.entries(this.requestHeaders)) {
-				headers.set(name, value);
-			}
+			const headers = this.createHeaders();
 
 			const response = await fetch(`${this.baseUrl}/chat/completions`, {
 				method: 'POST',
@@ -188,6 +190,74 @@ export class DeepSeekClient {
 		} finally {
 			cancelListener?.dispose();
 		}
+	}
+
+	/**
+	 * Non-streaming (`stream: false`) request: waits for the complete JSON response and
+	 * dispatches it through the same callbacks the streaming path uses.
+	 */
+	private async completeChatCompletion(
+		request: DeepSeekRequest,
+		callbacks: StreamCallbacks,
+		signal: AbortSignal,
+		cancellationToken?: CancellationToken,
+	): Promise<void> {
+		const response = await fetch(`${this.baseUrl}/chat/completions`, {
+			method: 'POST',
+			headers: this.createHeaders(),
+			// `stream_options` is only valid for streaming requests; JSON.stringify drops it here.
+			body: safeStringify({ ...request, stream: false, stream_options: undefined }),
+			signal,
+		});
+
+		if (!response.ok) {
+			throw await createHttpError(response, { baseUrl: this.baseUrl, request });
+		}
+
+		if (cancellationToken?.isCancellationRequested) {
+			return;
+		}
+
+		const payload = (await response.json()) as DeepSeekCompletionResponse;
+		const choice = payload.choices?.[0];
+		if (!choice) {
+			throw new Error('No completion choices received');
+		}
+
+		const message = choice.message;
+		if (message?.reasoning_content) {
+			callbacks.onThinking(message.reasoning_content);
+		}
+		if (message?.content) {
+			callbacks.onContent(message.content);
+		}
+		for (const toolCall of message?.tool_calls ?? []) {
+			if (!toolCall?.id) {
+				continue;
+			}
+			callbacks.onToolCall({
+				id: toolCall.id,
+				type: 'function',
+				function: {
+					name: toolCall.function?.name ?? '',
+					arguments: toolCall.function?.arguments ?? '',
+				},
+			});
+		}
+
+		reportFinalUsage(callbacks, payload.usage);
+		callbacks.onDone();
+	}
+
+	private createHeaders(): Headers {
+		const headers = new Headers({
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${this.apiKey}`,
+		});
+		for (const [name, value] of Object.entries(this.requestHeaders)) {
+			headers.set(name, value);
+		}
+		return headers;
 	}
 }
 
