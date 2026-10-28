@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Gateways in front of DeepSeek models sometimes leak their own control markup into the
  * text stream instead of using a dedicated reasoning channel. Observed leaks include
  * `<thinking>…</thinking>`, `<thought>…</thought>`, `<summary>`, `<now>`, `<content>` and
@@ -42,13 +42,14 @@ const SCAFFOLDING_TAGS = new Set([
 	'plan',
 ]);
 
-const SPECIAL_TOKEN_PATTERN = /^<\/?[|｜][^<>\n]{1,60}>/;
-const TAG_PATTERN = /^<(\/?)([A-Za-z][\w.-]{0,40})(?:\s[^<>\n]{0,80})?>/;
-const TAG_START_PATTERN = /^<\/?(?:[A-Za-z][\w.-]{0,40})?$/;
+const SPECIAL_TOKEN_PATTERN = /^<\/?[|｜][^<>\n]{1,60}>/; // Tolerate spacing variants such as `</ summary>` that gateways emit.
+const TAG_PATTERN = /^<\s*(\/?)\s*([A-Za-z][\w.-]{0,40})(\s[^<>\n]{0,80})?>/;
 const SPECIAL_TOKEN_START_PATTERN = /^<\/?[|｜][^<>\n]{0,60}$/;
 const FENCE_LINE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
 const FENCE_PREFIX_PATTERN = /^ {0,3}[`~]{0,2}$/;
-const COMMENT_LINE_PATTERN = /^\s*(?:\/\/|\*|<!--|#)/;
+// Only `//` style comments are protected. Markdown headings (`#`) and bullets (`*`) are
+// ordinary output lines, so leaked tags on them must still be removed.
+const COMMENT_LINE_PATTERN = /^\s*\/\/+/;
 const TOOL_SCAFFOLD_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*-(?:mcp-server|server)(?:-[a-z0-9_-]+)+$/;
 
 /** How much of the current line is kept to recognise comment-style lines. */
@@ -77,6 +78,7 @@ interface TagMatch {
 	raw: string;
 	name: string;
 	closing: boolean;
+	attrs: boolean;
 }
 
 /**
@@ -268,6 +270,22 @@ export function createLeakedMarkerFilter(): LeakedMarkerFilter {
 					continue;
 				}
 
+				// HTML comments are real content: emit them verbatim and do not filter inside.
+				if (pending.startsWith('<!--')) {
+					const commentEnd = pending.indexOf('-->');
+					if (commentEnd < 0) {
+						if (!final && pending.length < MAX_PENDING_CODE_SPAN_CHARS) {
+							return out.join('');
+						}
+						emit('<');
+						pending = pending.slice(1);
+						continue;
+					}
+					emit(pending.slice(0, commentEnd + 3));
+					pending = pending.slice(commentEnd + 3);
+					continue;
+				}
+
 				const tag = matchTag(pending);
 				if (!tag) {
 					if (!final && pending.length < MAX_TAG_CHARS && couldBecomeMarkup(pending)) {
@@ -384,12 +402,28 @@ function matchTag(text: string): TagMatch | undefined {
 		raw: match[0],
 		name: match[2].toLowerCase(),
 		closing: match[1] === '/',
+		attrs: Boolean(match[3]),
 	};
 }
 
 /** Whether the partial text could still grow into a tag or special token. */
 function couldBecomeMarkup(text: string): boolean {
-	return TAG_START_PATTERN.test(text) || SPECIAL_TOKEN_START_PATTERN.test(text);
+	if (!text.startsWith('<')) {
+		return false;
+	}
+	if (SPECIAL_TOKEN_START_PATTERN.test(text)) {
+		return true;
+	}
+	if (text.includes('>')) {
+		// A complete tag would already have been matched; this is prose.
+		return false;
+	}
+	// Hold any in-progress tag (`<details>` must stay recognisable across chunks) and any
+	// in-progress HTML comment, bounded by MAX_TAG_CHARS at the call site.
+	return (
+		/^<\s*\/?\s*(?:[A-Za-z][\w.-]{0,40})?(?:\s[^<>|\n]{0,80})?$/.test(text) ||
+		/^<!?-{0,2}$/.test(text)
+	);
 }
 
 function isReasoningTag(name: string): boolean {
@@ -397,7 +431,7 @@ function isReasoningTag(name: string): boolean {
 }
 
 function hasAttributes(tag: TagMatch): boolean {
-	return tag.raw.length > tag.name.length + 2;
+	return tag.attrs;
 }
 
 function isScaffoldingTag(name: string): boolean {

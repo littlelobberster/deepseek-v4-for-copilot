@@ -14,7 +14,11 @@ import {
 } from './replay';
 import type { PreparedChatRequest } from './request';
 import { formatRequestLogLine, type RequestKind } from './routing';
-import { createLeakedMarkerFilter, type LeakedMarkerFilter } from './leaked-markers';
+import {
+	createLeakedMarkerFilter,
+	stripLeakedMarkers,
+	type LeakedMarkerFilter,
+} from './leaked-markers';
 
 interface ResponseStreamState {
 	accumulatedReasoning: string;
@@ -75,7 +79,7 @@ export function streamChatCompletion({
 
 				onToolCall: (toolCall: DeepSeekToolCall) => {
 					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-					handleToolCall(toolCall, state, progress);
+					handleToolCall(toolCall, state, progress, Boolean(contentFilter));
 				},
 
 				onError: (error: Error) => {
@@ -264,16 +268,38 @@ function handleToolCall(
 	toolCall: DeepSeekToolCall,
 	state: ResponseStreamState,
 	progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+	filterLeakedMarkers: boolean,
 ): void {
 	state.emittedToolCallIds.push(toolCall.id);
 
+	const args = parseToolCallArguments(toolCall.function.arguments, filterLeakedMarkers);
+	progress.report(new vscode.LanguageModelToolCallPart(toolCall.id, toolCall.function.name, args));
+}
+
+/**
+ * Parse tool call arguments.
+ *
+ * A gateway that appends leaked markup after the JSON body turns a valid call into an
+ * unparsable one, which breaks the tool call and can end the turn early. Retry once with
+ * the markup removed; when the original text already parses it is used unchanged so real
+ * argument content is never rewritten.
+ */
+function parseToolCallArguments(raw: string, filterLeakedMarkers: boolean): object {
 	try {
-		const args = JSON.parse(toolCall.function.arguments);
-		progress.report(
-			new vscode.LanguageModelToolCallPart(toolCall.id, toolCall.function.name, args),
-		);
-	} catch {
-		progress.report(new vscode.LanguageModelToolCallPart(toolCall.id, toolCall.function.name, {}));
+		return JSON.parse(raw);
+	} catch (error) {
+		if (filterLeakedMarkers) {
+			const sanitized = stripLeakedMarkers(raw);
+			if (sanitized !== raw) {
+				try {
+					return JSON.parse(sanitized);
+				} catch {
+					// Fall through to the empty-arguments fallback below.
+				}
+			}
+		}
+		logger.warn('Failed to parse tool call arguments', error);
+		return {};
 	}
 }
 
