@@ -136,6 +136,11 @@
           "default": false,
           "markdownDescription": "%deepseek-copilot.config.nonStreaming.description%"
         },
+        "deepseek-copilot.stripThinkingTags": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%deepseek-copilot.config.stripThinkingTags.description%"
+        },
         "deepseek-copilot.requestHeaders": {
           "type": "object",
           "default": {},

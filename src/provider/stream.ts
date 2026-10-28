@@ -14,6 +14,7 @@ import {
 } from './replay';
 import type { PreparedChatRequest } from './request';
 import { formatRequestLogLine, type RequestKind } from './routing';
+import { createThinkingTagFilter, type ThinkingTagFilter } from './thinking-tags';
 
 interface ResponseStreamState {
 	accumulatedReasoning: string;
@@ -48,14 +49,22 @@ export function streamChatCompletion({
 		replayMarkerReported: false,
 	};
 	const cancelListener = observeCancellationToken(token, prepared.cacheDiagnostics);
+	const thinkingTagFilter = prepared.stripThinkingTags ? createThinkingTagFilter() : undefined;
+
+	const reportContent = (content: string): void => {
+		if (!content) {
+			return;
+		}
+		reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
+		progress.report(new vscode.LanguageModelTextPart(content));
+	};
 
 	return prepared.client
 		.streamChatCompletion(
 			prepared.request,
 			{
 				onContent: (content: string) => {
-					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-					progress.report(new vscode.LanguageModelTextPart(content));
+					reportContent(thinkingTagFilter ? thinkingTagFilter.push(content) : content);
 				},
 
 				onThinking: (text: string) => {
@@ -73,6 +82,8 @@ export function streamChatCompletion({
 				},
 
 				onDone: () => {
+					reportContent(thinkingTagFilter?.flush() ?? '');
+					logFilteredThinkingTags(prepared, thinkingTagFilter);
 					reportReplayMarkerOnce(prepared, progress, state, 'done');
 					finalizeReplayDiagnostics(
 						prepared.trailingToolResultIds,
@@ -111,6 +122,22 @@ export function streamChatCompletion({
 		.finally(() => {
 			cancelListener.dispose();
 		});
+}
+
+function logFilteredThinkingTags(
+	prepared: PreparedChatRequest,
+	filter: ThinkingTagFilter | undefined,
+): void {
+	const strippedChars = filter?.strippedChars() ?? 0;
+	if (strippedChars === 0) {
+		return;
+	}
+	logger.debug(
+		formatRequestLogLine(
+			prepared.requestKind,
+			`stripped ${strippedChars} chars of <thinking> tags from assistant output`,
+		),
+	);
 }
 
 function reportInitialResponseNoticeOnce(

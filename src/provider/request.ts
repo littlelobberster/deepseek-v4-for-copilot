@@ -7,6 +7,7 @@ import {
 	getMaxTokens,
 	getNonStreamingEnabled,
 	getRequestHeaders,
+	getStripThinkingTagsEnabled,
 } from '../config';
 import { MODELS } from '../consts';
 import { isOfficialDeepSeekBaseUrl } from '../endpoint';
@@ -42,6 +43,8 @@ export interface PreparedChatRequest {
 	replayMarkerMetadata: ReplayMarkerMetadata;
 	visionMarkerTextChars?: number;
 	initialResponseNotice?: string;
+	/** Whether leaked `<thinking>` tags are stripped from the model output. */
+	stripThinkingTags: boolean;
 }
 
 export interface PrepareChatRequestOptions {
@@ -91,7 +94,13 @@ export async function prepareChatRequest({
 
 	const resolvedMessages = visionResolution.messages;
 
-	const deepseekMessages = convertMessages(resolvedMessages, isThinkingModel, nativeImageInput);
+	const stripThinkingTags = getStripThinkingTagsEnabled();
+	const deepseekMessages = convertMessages(
+		resolvedMessages,
+		isThinkingModel,
+		nativeImageInput,
+		stripThinkingTags,
+	);
 	finalizeVisionResolutionStats(visionResolution.stats, deepseekMessages);
 	const tools = prepareRequestTools(modelDef?.capabilities.toolCalling, options);
 
@@ -176,5 +185,6 @@ export async function prepareChatRequest({
 		replayMarkerMetadata: visionResolution.replayMarkerMetadata,
 		visionMarkerTextChars: visionResolution.stats.markerVisionTextChars || undefined,
 		initialResponseNotice: visionResolution.initialResponseNotice,
+		stripThinkingTags,
 	};
 }

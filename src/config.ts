@@ -53,6 +53,15 @@ export function getNonStreamingEnabled(): boolean {
 }
 
 /**
+ * Whether to strip `<thinking>...</thinking>` tags that some OpenAI-compatible
+ * gateways leak into the assistant `content` field.
+ */
+export function getStripThinkingTagsEnabled(): boolean {
+	const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+	return config.get<boolean>('stripThinkingTags', true);
+}
+
+/**
  * Diagnostic mode. `verbose` also enables metadata logs.
  *
  * The legacy boolean `debug` setting is still read as a fallback so old

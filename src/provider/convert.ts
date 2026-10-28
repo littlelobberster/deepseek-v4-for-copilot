@@ -7,6 +7,7 @@ import type {
 	DeepSeekToolCall,
 } from '../types';
 import { parseFirstReplayMarker } from './replay';
+import { stripThinkingTags as stripLeakedThinkingTags } from './thinking-tags';
 import {
 	isImageDataPart,
 	normalizeToolResult,
@@ -21,6 +22,7 @@ export function convertMessages(
 	messages: readonly vscode.LanguageModelChatRequestMessage[],
 	isThinkingModel: boolean,
 	nativeImageInput: boolean,
+	stripThinkingTags = true,
 ): DeepSeekMessage[] {
 	const result: DeepSeekMessage[] = [];
 
@@ -66,11 +68,14 @@ export function convertMessages(
 		}
 
 		if (role === 'assistant') {
-			if (content || toolCalls.length > 0) {
+			// Historical assistant turns may already carry leaked `<thinking>` tags; drop
+			// them so the pollution does not get resent on every following request.
+			const assistantContent = stripThinkingTags ? stripLeakedThinkingTags(content) : content;
+			if (assistantContent || toolCalls.length > 0) {
 				const replayMarker = isThinkingModel ? parseFirstReplayMarker(message) : undefined;
 				const msg: DeepSeekMessage = {
 					role: 'assistant' as const,
-					content: content || '',
+					content: assistantContent || '',
 				};
 
 				if (toolCalls.length > 0) {
