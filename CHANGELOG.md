@@ -6,6 +6,10 @@
 
 * add `deepseek-copilot.nonStreaming` setting to send `stream: false` requests and dispatch the full response once
 
+### Bug Fixes
+
+* **vision:** reuse image descriptions across requests instead of calling the vision model again for every turn when the host does not replay `toolVision` marker metadata
+
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 
 

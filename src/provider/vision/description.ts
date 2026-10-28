@@ -3,6 +3,11 @@ import { t } from '../../i18n';
 import { toWellFormedString } from '../../json';
 import { createVisionProxyFailureNotice, createVisionProxyMissingNotice } from '../tools/notices';
 import {
+	createVisionImageCacheKey,
+	getCachedVisionDescription,
+	storeCachedVisionDescription,
+} from './cache';
+import {
 	IMAGE_DESCRIPTION_PREFIX,
 	IMAGE_DESCRIPTION_SUFFIX,
 	IMAGE_DESCRIPTION_UNAVAILABLE,
@@ -65,9 +70,24 @@ export function createVisionDescriptionSession(
 				return IMAGE_DESCRIPTION_UNAVAILABLE;
 			}
 
+			const prompt = getVisionPrompt();
+			const cacheKey = createVisionImageCacheKey({
+				describer: `${currentDescriber.source}:${currentDescriber.id}`,
+				prompt,
+				images,
+			});
+			const cachedDescription = getCachedVisionDescription(cacheKey);
+			if (cachedDescription !== undefined) {
+				stats.generatedImageMessages += 1;
+				recordImageOutcome(stats, owner, images.length, 'forwarded');
+				return toWellFormedString(
+					IMAGE_DESCRIPTION_PREFIX + cachedDescription + IMAGE_DESCRIPTION_SUFFIX,
+				);
+			}
+
 			try {
 				const description = await currentDescriber.describe({
-					prompt: getVisionPrompt(),
+					prompt,
 					images,
 					token,
 				});
@@ -83,6 +103,7 @@ export function createVisionDescriptionSession(
 
 				stats.generatedImageMessages += 1;
 				recordImageOutcome(stats, owner, images.length, 'forwarded');
+				storeCachedVisionDescription(cacheKey, description);
 				return toWellFormedString(
 					IMAGE_DESCRIPTION_PREFIX + description + IMAGE_DESCRIPTION_SUFFIX,
 				);
