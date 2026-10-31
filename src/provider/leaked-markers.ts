@@ -74,6 +74,14 @@ export interface LeakedMarkerFilterOptions {
 	 * where a leaked reasoning block is not part of the answer.
 	 */
 	dropReasoningBlocks?: boolean;
+	/**
+	 * Where reasoning that leaked into reply content should go instead of the body.
+	 *
+	 * Gateways sometimes prefix reasoning with a bare `<thinking>` and never close it. That
+	 * text is reasoning, not answer, so it is handed here (the thinking channel) rather than
+	 * rendered as body text. Without a handler such blocks are dropped.
+	 */
+	onLeakedReasoning?: (text: string) => void;
 }
 
 export interface LeakedMarkerFilter {
@@ -89,6 +97,80 @@ export interface LeakedMarkerFilter {
 export function stripLeakedMarkers(text: string, options: LeakedMarkerFilterOptions = {}): string {
 	const filter = createLeakedMarkerFilter(options);
 	return filter.push(text) + filter.flush();
+}
+
+const TRAILING_MARKER_PATTERN =
+	/(?:<\s*\/?\s*(?:thinking|thought|think|analytical|analytic|reasoning|reasoning_scratchpad|visual_thinking|summary|now|content|status|invoke|review_begin|clarification|query|analysis|scratchpad|plan)\b[^<>\n]{0,80}>|<\s*\/?\s*[|｜][^<>\n]{1,60}>)$/i;
+
+/**
+ * Strip marker tags that leaked onto the **end** of a value.
+ *
+ * Gateways append their closing marker after the whole completion, which lands inside
+ * tool call arguments such as a `task_complete` summary. Such arguments still parse as
+ * valid JSON, so nothing else filters them, yet the host renders that summary as the
+ * assistant reply and the tag reaches the user. Only trailing markers are removed:
+ * mid-value text, and values ending inside an unterminated code fence, stay untouched.
+ */
+export function stripTrailingMarkers(text: string): string {
+	if (!text.includes('<') || hasUnterminatedFence(text) || endsInsideDetails(text)) {
+		return text;
+	}
+
+	const endsWithNewline = text.endsWith('\n');
+	let body = text.replace(/\s+$/, '');
+	let changed = false;
+
+	for (;;) {
+		// A comment line owns its markup (for example `/// <summary>…</summary>`), so a
+		// trailing tag there is real content, not a leak.
+		if (isCommentLine(lastLineOf(body))) {
+			break;
+		}
+		const next = body.replace(TRAILING_MARKER_PATTERN, '').replace(/\s+$/, '');
+		if (next === body) {
+			break;
+		}
+		body = next;
+		changed = true;
+	}
+
+	if (!changed) {
+		return text;
+	}
+	return endsWithNewline && body ? `${body}\n` : body;
+}
+
+function lastLineOf(text: string): string {
+	const index = text.lastIndexOf('\n');
+	return index < 0 ? text : text.slice(index + 1);
+}
+
+function isCommentLine(line: string): boolean {
+	return /^\s*(?:\/\/|<!--)/.test(line);
+}
+
+/** A value that genuinely ends inside an open `<details>` owns its `<summary>`. */
+function endsInsideDetails(text: string): boolean {
+	const lowered = text.toLowerCase();
+	const lastOpen = lowered.lastIndexOf('<details');
+	if (lastOpen < 0) {
+		return false;
+	}
+	const lastClose = lowered.lastIndexOf('</details');
+	if (lastClose > lastOpen) {
+		return false;
+	}
+	// Only guard when the open block really reaches the end of the value; an inline
+	// example mentioned earlier in the text must not disable cleanup.
+	return text.length - lastOpen < 300;
+}
+
+function hasUnterminatedFence(text: string): boolean {
+	let count = 0;
+	for (let index = text.indexOf('```'); index >= 0; index = text.indexOf('```', index + 3)) {
+		count += 1;
+	}
+	return count % 2 === 1;
 }
 
 interface TagMatch {
@@ -108,6 +190,7 @@ export function createLeakedMarkerFilter(
 	options: LeakedMarkerFilterOptions = {},
 ): LeakedMarkerFilter {
 	const dropReasoningBlocks = options.dropReasoningBlocks !== false;
+	const onLeakedReasoning = options.onLeakedReasoning;
 
 	let pending = '';
 	let blockTag: string | undefined;
@@ -139,6 +222,18 @@ export function createLeakedMarkerFilter(
 				// The dropped markup was the only thing on this line.
 				suppressNewline = true;
 			}
+		};
+
+		/**
+		 * Reasoning that leaked into the body: hand it to the thinking channel, never to the
+		 * body. Without a handler it is simply dropped.
+		 */
+		const divertLeakedReasoning = (text: string): void => {
+			if (!text) {
+				return;
+			}
+			stripped += text.length;
+			onLeakedReasoning?.(text);
 		};
 
 		const endLine = (): void => {
@@ -181,25 +276,41 @@ export function createLeakedMarkerFilter(
 				pending = pending.slice(pending.length - keep);
 
 				if (blockBuffer.length > MAX_DROPPED_BLOCK_CHARS) {
-					// Treat it as ordinary text instead of eating the rest of the message. The
-					// buffered text is re-filtered so tag removal stays identical to a live parse.
-					const restore = blockBuffer;
+					// Do not eat the rest of the message. If this is body text, hand the
+					// reasoning to the thinking channel; otherwise drop it as before. The block
+					// stays open so the remaining text is handled the same way.
+					divertLeakedReasoning(stripLeakedMarkers(blockBuffer, { dropReasoningBlocks: false }));
 					blockBuffer = '';
-					blockTag = undefined;
-					emit(stripLeakedMarkers(restore, { dropReasoningBlocks: false }));
-					continue;
-				}
-
-				if (!final) {
 					return out.join('');
 				}
 
-				// End of stream without a closing tag: keep the content.
+				if (!final) {
+					// A closing tag may still arrive, so keep buffering instead of guessing where
+					// the reasoning ends. Guessing here would make the streamed result differ from
+					// a single-shot parse of the same text.
+					return out.join('');
+				}
+
+				// End of stream without a closing tag: the buffered text is reasoning. The answer
+				// usually starts after the first blank line, so split there and keep parsing the
+				// remainder as reply text instead of dropping it.
 				const restore = blockBuffer + pending;
 				blockBuffer = '';
 				pending = '';
 				blockTag = undefined;
-				emit(stripLeakedMarkers(restore, { dropReasoningBlocks: false }));
+
+				const paragraphBreak = restore.indexOf('\n\n');
+				if (paragraphBreak >= 0) {
+					divertLeakedReasoning(
+						stripLeakedMarkers(restore.slice(0, paragraphBreak), {
+							dropReasoningBlocks: false,
+						}),
+					);
+					pending = restore.slice(paragraphBreak + 2);
+					continue;
+				}
+
+				divertLeakedReasoning(stripLeakedMarkers(restore, { dropReasoningBlocks: false }));
 				return out.join('');
 			}
 

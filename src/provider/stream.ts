@@ -17,6 +17,7 @@ import { formatRequestLogLine, type RequestKind } from './routing';
 import {
 	createLeakedMarkerFilter,
 	stripLeakedMarkers,
+	stripTrailingMarkers,
 	type LeakedMarkerFilter,
 } from './leaked-markers';
 
@@ -53,7 +54,16 @@ export function streamChatCompletion({
 		replayMarkerReported: false,
 	};
 	const cancelListener = observeCancellationToken(token, prepared.cacheDiagnostics);
-	const contentFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
+	const contentFilter = prepared.filterLeakedMarkers
+		? createLeakedMarkerFilter({
+				// Reasoning that leaks into the body is shown in the thinking block instead of
+				// the reply, so it is neither lost nor mistaken for an answer.
+				onLeakedReasoning: (text) => {
+					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
+					handleThinking(text, state, progress);
+				},
+			})
+		: undefined;
 	// The thinking channel already is reasoning: only bare tags are removed there, never text.
 	const thinkingFilter = prepared.filterLeakedMarkers
 		? createLeakedMarkerFilter({ dropReasoningBlocks: false })
@@ -286,24 +296,63 @@ function handleToolCall(
  * unparsable one, which breaks the tool call and can end the turn early. Retry once with
  * the markup removed; when the original text already parses it is used unchanged so real
  * argument content is never rewritten.
+ *
+ * Markup can also land *inside* a string value (for example a `task_complete` summary,
+ * which the host then renders as the reply). Successful parses therefore still have
+ * trailing markers removed from their string values.
  */
 function parseToolCallArguments(raw: string, filterLeakedMarkers: boolean): object {
+	if (!filterLeakedMarkers) {
+		return parseJsonOrEmpty(raw);
+	}
+
+	try {
+		return sanitizeArgumentStrings(JSON.parse(raw)) as object;
+	} catch {
+		// Fall through and retry with the markup removed.
+	}
+
+	const sanitized = stripLeakedMarkers(raw);
+	if (sanitized !== raw) {
+		try {
+			return sanitizeArgumentStrings(JSON.parse(sanitized)) as object;
+		} catch {
+			// Fall through to the empty-arguments fallback below.
+		}
+	}
+
+	logger.warn('Failed to parse tool call arguments', raw.slice(0, 200));
+	return {};
+}
+
+function parseJsonOrEmpty(raw: string): object {
 	try {
 		return JSON.parse(raw);
 	} catch (error) {
-		if (filterLeakedMarkers) {
-			const sanitized = stripLeakedMarkers(raw);
-			if (sanitized !== raw) {
-				try {
-					return JSON.parse(sanitized);
-				} catch {
-					// Fall through to the empty-arguments fallback below.
-				}
-			}
-		}
 		logger.warn('Failed to parse tool call arguments', error);
 		return {};
 	}
+}
+
+/** Remove leaked trailing markers from every string value in the arguments. */
+function sanitizeArgumentStrings(value: unknown, depth = 0): unknown {
+	if (depth > 8) {
+		return value;
+	}
+	if (typeof value === 'string') {
+		return stripTrailingMarkers(value);
+	}
+	if (Array.isArray(value)) {
+		return value.map((item) => sanitizeArgumentStrings(item, depth + 1));
+	}
+	if (value && typeof value === 'object') {
+		const result: Record<string, unknown> = {};
+		for (const [key, item] of Object.entries(value)) {
+			result[key] = sanitizeArgumentStrings(item, depth + 1);
+		}
+		return result;
+	}
+	return value;
 }
 
 function finalizeReplayDiagnostics(
