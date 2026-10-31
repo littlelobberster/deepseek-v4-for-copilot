@@ -54,7 +54,10 @@ export function streamChatCompletion({
 	};
 	const cancelListener = observeCancellationToken(token, prepared.cacheDiagnostics);
 	const contentFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
-	const thinkingFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
+	// The thinking channel already is reasoning: only bare tags are removed there, never text.
+	const thinkingFilter = prepared.filterLeakedMarkers
+		? createLeakedMarkerFilter({ dropReasoningBlocks: false })
+		: undefined;
 
 	const reportContent = (content: string): void => {
 		if (!content) {

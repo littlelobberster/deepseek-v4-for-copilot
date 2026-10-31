@@ -164,7 +164,7 @@ function getReasoningContent(
 		replayMarker?.valid && replayMarker.reasoningText
 			? replayMarker.reasoningText
 			: thinkingContent;
-	return filterMarkers ? stripLeakedMarkers(reasoning) : reasoning;
+	return filterMarkers ? stripLeakedMarkers(reasoning, { dropReasoningBlocks: false }) : reasoning;
 }
 
 function isLanguageModelThinkingPart(part: unknown): part is vscode.LanguageModelThinkingPart {

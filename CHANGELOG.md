@@ -11,6 +11,7 @@
 * **vision:** reuse image descriptions across requests instead of calling the vision model again for every turn when the host does not replay `toolVision` marker metadata
 * **provider:** strip control markup that third-party gateways leak into replies: `<thinking>`/`<thought>`/`<analytic>` reasoning blocks, `<summary>`/`<now>`/`<content>`/`<status>` scaffolding tags, fabricated tool-call wrappers, and `<|…|>`/`<｜…｜>` special tokens. Fenced code blocks and inline code are never modified, so C# doc comments and HTML `<details><summary>` markup keep working; markdown headings and bullets are filtered too, and spacing variants such as `</ summary>` are recognised. Controlled by `deepseek-copilot.filterLeakedMarkers` (replaces `stripThinkingTags`, which is still read as a fallback)
 * **provider:** recover tool calls whose JSON arguments have leaked markup appended, so the call is no longer dropped as unparsable (a common cause of a turn ending early)
+* **provider:** never drop reasoning text: the thinking channel removes only bare marker tags, and an unterminated `<thinking>` block restores its content (bounded to 4000 chars) instead of swallowing the rest of the message
 
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 

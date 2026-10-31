@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Gateways in front of DeepSeek models sometimes leak their own control markup into the
  * text stream instead of using a dedicated reasoning channel. Observed leaks include
  * `<thinking>…</thinking>`, `<thought>…</thought>`, `<summary>`, `<now>`, `<content>` and
@@ -58,6 +58,23 @@ const LINE_PREFIX_CHARS = 16;
 const MAX_TAG_CHARS = 128;
 /** Unclosed backticks longer than this are treated as literal text instead of waiting. */
 const MAX_PENDING_CODE_SPAN_CHARS = 4096;
+/**
+ * Upper bound on how much text a single reasoning block may swallow. Gateways sometimes
+ * prefix reasoning with a bare `<thinking>` and never close it; without a bound the rest
+ * of the message would disappear.
+ */
+const MAX_DROPPED_BLOCK_CHARS = 4000;
+
+export interface LeakedMarkerFilterOptions {
+	/**
+	 * Drop the *content* of reasoning blocks (`<thinking>…</thinking>`).
+	 *
+	 * Keep this off for the thinking channel and for replayed reasoning: that text already
+	 * is reasoning, so only the bare tags should be removed. It stays on for reply content,
+	 * where a leaked reasoning block is not part of the answer.
+	 */
+	dropReasoningBlocks?: boolean;
+}
 
 export interface LeakedMarkerFilter {
 	/** Feed a streamed chunk; returns the text that is safe to show now. */
@@ -69,8 +86,8 @@ export interface LeakedMarkerFilter {
 }
 
 /** Remove leaked gateway markup from a complete text. */
-export function stripLeakedMarkers(text: string): string {
-	const filter = createLeakedMarkerFilter();
+export function stripLeakedMarkers(text: string, options: LeakedMarkerFilterOptions = {}): string {
+	const filter = createLeakedMarkerFilter(options);
 	return filter.push(text) + filter.flush();
 }
 
@@ -87,9 +104,14 @@ interface TagMatch {
  * Tags arrive split across chunks (`<thin` + `king>`), so an incomplete tag is held back
  * until the rest of the chunk arrives.
  */
-export function createLeakedMarkerFilter(): LeakedMarkerFilter {
+export function createLeakedMarkerFilter(
+	options: LeakedMarkerFilterOptions = {},
+): LeakedMarkerFilter {
+	const dropReasoningBlocks = options.dropReasoningBlocks !== false;
+
 	let pending = '';
 	let blockTag: string | undefined;
+	let blockBuffer = '';
 	let fence: { char: string; len: number } | undefined;
 	let atLineStart = true;
 	let linePrefix = '';
@@ -133,36 +155,52 @@ export function createLeakedMarkerFilter(): LeakedMarkerFilter {
 		for (;;) {
 			if (blockTag) {
 				const closeIndex = indexOfIgnoreCase(pending, `</${blockTag}`);
-				if (closeIndex < 0) {
-					const keep = partialPrefixLength(pending, `</${blockTag}>`);
-					stripped += pending.length - keep;
-					pending = pending.slice(pending.length - keep);
-					if (final) {
-						stripped += pending.length;
-						pending = '';
+				if (closeIndex >= 0) {
+					const closeEnd = pending.indexOf('>', closeIndex);
+					if (closeEnd >= 0) {
+						// A complete block: drop it, including the opening tag we buffered.
+						stripped += blockBuffer.length + closeEnd + 1;
+						blockBuffer = '';
+						pending = pending.slice(closeEnd + 1);
 						blockTag = undefined;
+						suppressNewline = !lineEmittedAny;
+						continue;
 					}
-					return out.join('');
-				}
-
-				const closeEnd = pending.indexOf('>', closeIndex);
-				if (closeEnd < 0) {
 					if (!final) {
-						stripped += closeIndex;
+						// Wait for the rest of the closing tag.
+						blockBuffer += pending.slice(0, closeIndex);
 						pending = pending.slice(closeIndex);
 						return out.join('');
 					}
-					stripped += pending.length;
-					pending = '';
+				}
+
+				// No closing tag yet: buffer the text so it can be restored when the block
+				// turns out to be unterminated (gateways sometimes emit a bare `<thinking>`).
+				const keep = partialPrefixLength(pending, `</${blockTag}>`);
+				blockBuffer += pending.slice(0, pending.length - keep);
+				pending = pending.slice(pending.length - keep);
+
+				if (blockBuffer.length > MAX_DROPPED_BLOCK_CHARS) {
+					// Treat it as ordinary text instead of eating the rest of the message. The
+					// buffered text is re-filtered so tag removal stays identical to a live parse.
+					const restore = blockBuffer;
+					blockBuffer = '';
 					blockTag = undefined;
+					emit(stripLeakedMarkers(restore, { dropReasoningBlocks: false }));
 					continue;
 				}
 
-				stripped += closeEnd + 1;
-				pending = pending.slice(closeEnd + 1);
+				if (!final) {
+					return out.join('');
+				}
+
+				// End of stream without a closing tag: keep the content.
+				const restore = blockBuffer + pending;
+				blockBuffer = '';
+				pending = '';
 				blockTag = undefined;
-				suppressNewline = !lineEmittedAny;
-				continue;
+				emit(stripLeakedMarkers(restore, { dropReasoningBlocks: false }));
+				return out.join('');
 			}
 
 			if (pending.length === 0) {
@@ -302,23 +340,33 @@ export function createLeakedMarkerFilter(): LeakedMarkerFilter {
 						pending = pending.slice(tag.raw.length);
 						continue;
 					}
-					// Only a bare tag at the start of a line is treated as leaked reasoning.
-					// Anything else may be prose about markup, so it is left alone.
-					const structural = !lineEmittedAny && !hasAttributes(tag);
+					if (hasAttributes(tag)) {
+						// Looks like prose ("use <think about it>"), not a marker.
+						emit(tag.raw);
+						pending = pending.slice(tag.raw.length);
+						continue;
+					}
+					// Only a bare tag at the start of a line is treated as leaked reasoning
+					// whose body should be dropped. Everywhere else the tag goes away and the
+					// text stays, which keeps reasoning content intact.
+					const structural = dropReasoningBlocks && !lineEmittedAny;
+					if (!structural) {
+						drop(tag.raw.length);
+						pending = pending.slice(tag.raw.length);
+						continue;
+					}
+
 					const closeIndex = indexOfIgnoreCase(pending, `</${tag.name}`, tag.raw.length);
-					if (closeIndex < 0) {
-						if (!final) {
-							if (structural) {
-								drop(tag.raw.length);
-								pending = pending.slice(tag.raw.length);
-								blockTag = tag.name;
-								continue;
-							}
-							return out.join('');
+					if (closeIndex >= 0) {
+						const closeEnd = pending.indexOf('>', closeIndex);
+						if (closeEnd >= 0) {
+							drop(closeEnd + 1);
+							pending = pending.slice(closeEnd + 1);
+							continue;
 						}
-						if (structural) {
-							drop(tag.raw.length);
-							pending = pending.slice(tag.raw.length);
+						if (!final) {
+							blockBuffer = pending;
+							pending = '';
 							blockTag = tag.name;
 							continue;
 						}
@@ -326,17 +374,18 @@ export function createLeakedMarkerFilter(): LeakedMarkerFilter {
 						pending = '';
 						return out.join('');
 					}
-					const closeEnd = pending.indexOf('>', closeIndex);
-					if (closeEnd < 0) {
-						if (!final) {
-							return out.join('');
-						}
-						emit(pending);
-						pending = '';
-						return out.join('');
+
+					if (!final) {
+						// Drop the tag now so an unterminated block restores only real text.
+						drop(tag.raw.length);
+						pending = pending.slice(tag.raw.length);
+						blockBuffer = '';
+						blockTag = tag.name;
+						continue;
 					}
-					drop(closeEnd + 1);
-					pending = pending.slice(closeEnd + 1);
+
+					drop(tag.raw.length);
+					pending = pending.slice(tag.raw.length);
 					continue;
 				}
 
@@ -381,6 +430,8 @@ export function createLeakedMarkerFilter(): LeakedMarkerFilter {
 
 		flush(): string {
 			const out = drain(true);
+			// drain(true) restores an unterminated reasoning block, so nothing is buffered here.
+			blockBuffer = '';
 			pending = '';
 			blockTag = undefined;
 			fence = undefined;
