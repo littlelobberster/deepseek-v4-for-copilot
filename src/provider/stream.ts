@@ -2,6 +2,7 @@ import vscode from 'vscode';
 import { createUserFacingError } from '../client';
 import { logger } from '../logger';
 import type { DeepSeekToolCall, DeepSeekUsage } from '../types';
+import { DuplicateContentSuppressor } from './duplicate-content';
 import {
 	observeCancellationToken,
 	type CacheDiagnosticsRun,
@@ -59,6 +60,10 @@ export function streamChatCompletion({
 	const thinkingFilter = prepared.filterLeakedMarkers
 		? createLeakedMarkerFilter({ dropReasoningBlocks: false })
 		: undefined;
+	// Gateways sometimes repeat the reasoning in the body with no tags; suppress that copy.
+	const duplicateSuppressor = prepared.filterLeakedMarkers
+		? new DuplicateContentSuppressor(() => state.accumulatedReasoning, prepared.isThinkingModel)
+		: undefined;
 
 	const reportContent = (content: string): void => {
 		if (!content) {
@@ -68,13 +73,16 @@ export function streamChatCompletion({
 		progress.report(new vscode.LanguageModelTextPart(content));
 	};
 
+	const handleContent = (content: string): void => {
+		const deduplicated = duplicateSuppressor ? duplicateSuppressor.push(content) : content;
+		reportContent(contentFilter ? contentFilter.push(deduplicated) : deduplicated);
+	};
+
 	return prepared.client
 		.streamChatCompletion(
 			prepared.request,
 			{
-				onContent: (content: string) => {
-					reportContent(contentFilter ? contentFilter.push(content) : content);
-				},
+				onContent: handleContent,
 
 				onThinking: (text: string) => {
 					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
@@ -91,6 +99,10 @@ export function streamChatCompletion({
 				},
 
 				onDone: () => {
+					const duplicateTail = duplicateSuppressor?.flush() ?? '';
+					if (duplicateTail) {
+						handleContent(duplicateTail);
+					}
 					reportContent(contentFilter?.flush() ?? '');
 					const trailingThinking = thinkingFilter?.flush() ?? '';
 					if (trailingThinking) {
