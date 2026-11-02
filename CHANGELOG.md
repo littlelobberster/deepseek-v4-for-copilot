@@ -13,6 +13,7 @@
 * **provider:** recover tool calls whose JSON arguments have leaked markup appended, so the call is no longer dropped as unparsable (a common cause of a turn ending early)
 * **provider:** never drop reasoning text: the thinking channel removes only bare marker tags, and an unterminated `<thinking>` block restores its content (bounded to 4000 chars) instead of swallowing the rest of the message
 * **provider:** keep reasoning out of the reply body: reasoning that leaks into content is routed to the thinking channel (split at the first blank line when no closing tag ever arrives), and markers appended to tool-call arguments are removed so they no longer surface in the rendered answer
+* **provider:** never let filtering empty a reply: a message that was entirely one reasoning block keeps its text (tags stripped) instead of vanishing, which previously made the turn end with no output and hid the model's own previous answer from history
 
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 

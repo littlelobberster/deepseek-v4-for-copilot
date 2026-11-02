@@ -54,16 +54,7 @@ export function streamChatCompletion({
 		replayMarkerReported: false,
 	};
 	const cancelListener = observeCancellationToken(token, prepared.cacheDiagnostics);
-	const contentFilter = prepared.filterLeakedMarkers
-		? createLeakedMarkerFilter({
-				// Reasoning that leaks into the body is shown in the thinking block instead of
-				// the reply, so it is neither lost nor mistaken for an answer.
-				onLeakedReasoning: (text) => {
-					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-					handleThinking(text, state, progress);
-				},
-			})
-		: undefined;
+	const contentFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
 	// The thinking channel already is reasoning: only bare tags are removed there, never text.
 	const thinkingFilter = prepared.filterLeakedMarkers
 		? createLeakedMarkerFilter({ dropReasoningBlocks: false })
