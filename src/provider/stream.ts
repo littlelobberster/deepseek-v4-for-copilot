@@ -8,6 +8,7 @@ import {
 	buildContinuationRequest,
 	decideContinuation,
 	isCompletionCheckDone,
+	looksUnfinished,
 	type AutoContinueConfig,
 } from './continuation';
 import { DuplicateContentSuppressor } from './duplicate-content';
@@ -166,6 +167,9 @@ export async function streamChatCompletion({
 			attempt += 1;
 			logContinuation(prepared, attempt, visibleText.length);
 			request = buildContinuationRequest(prepared.request, visibleText, autoContinue.prompt);
+			// The partial answer is now replayed as history, so duplicate suppression starts
+			// fresh: otherwise the suppressed reasoning would be released on the next attempt.
+			duplicateSuppressor?.reset();
 		}
 
 		flushFilters(prepared, {
@@ -217,7 +221,9 @@ async function shouldVerifyCompletion(
 		toolCallsThisAttempt > 0 ||
 		attempt >= config.maxAttempts ||
 		token.isCancellationRequested ||
-		!partialText.trim()
+		!partialText.trim() ||
+		// Only spend a request when the answer actually looks cut off.
+		!looksUnfinished(partialText)
 	) {
 		return false;
 	}

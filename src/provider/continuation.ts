@@ -105,3 +105,33 @@ export function isCompletionCheckDone(reply: string): boolean {
 	// Unknown output: treat as done so a chatty model cannot loop forever.
 	return !normalized.includes('CONTINUE');
 }
+
+/**
+ * Whether an answer looks cut off mid-way.
+ *
+ * Used to gate the optional completion check, so an ordinary finished answer never costs
+ * an extra request. Only structural evidence counts; guessing from tone produces far more
+ * false positives than it is worth.
+ */
+export function looksUnfinished(text: string): boolean {
+	const trimmed = text.replace(/\s+$/, '');
+	if (!trimmed) {
+		return false;
+	}
+
+	// An unclosed fenced block is the clearest sign of a cut-off answer.
+	const fences = trimmed.match(/```/g)?.length ?? 0;
+	if (fences % 2 === 1) {
+		return true;
+	}
+
+	// Ends on a connector that expects a continuation.
+	if (/[,;:，；：、\-–—(（[【]$/.test(trimmed)) {
+		return true;
+	}
+	if (/(\.\.\.|…)$/.test(trimmed)) {
+		return true;
+	}
+
+	return false;
+}

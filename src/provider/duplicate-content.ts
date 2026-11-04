@@ -137,6 +137,13 @@ export class DuplicateContentSuppressor {
 		this.held = '';
 		return released;
 	}
+
+	/** Start over for a new request (used when a continuation begins). */
+	reset(): void {
+		this.held = '';
+		this.state = 'pending';
+		this.lastReasoningLength = -1;
+	}
 }
 
 function isPrefix(candidate: string, reasoning: string): boolean {
