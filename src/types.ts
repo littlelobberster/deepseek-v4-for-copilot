@@ -118,12 +118,25 @@ export interface DeepSeekCompletionResponse {
 
 // ---- Stream callbacks ----
 
+/**
+ * How a completion ended.
+ *
+ * `completed` means the provider signalled a proper end (`[DONE]`, `finish_reason`, or a
+ * full JSON body). `truncated` marks a response that stopped early: the body ended
+ * without a terminator, the JSON was cut off, or the token limit was hit.
+ */
+export interface CompletionSignal {
+	finishReason: string | null;
+	completed: boolean;
+	truncated: boolean;
+}
+
 export interface StreamCallbacks {
 	onContent: (content: string) => void;
 	onThinking: (text: string) => void;
 	onToolCall: (toolCall: DeepSeekToolCall) => void;
 	onError: (error: Error) => void;
-	onDone: () => void;
+	onDone: (signal?: CompletionSignal) => void;
 	onUsage?: (usage: DeepSeekUsage) => void;
 }
 

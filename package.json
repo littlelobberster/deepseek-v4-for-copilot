@@ -147,6 +147,28 @@
           "deprecationMessage": "%deepseek-copilot.config.stripThinkingTags.deprecation%",
           "markdownDescription": "%deepseek-copilot.config.stripThinkingTags.description%"
         },
+        "deepseek-copilot.autoContinue": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%deepseek-copilot.config.autoContinue.description%"
+        },
+        "deepseek-copilot.autoContinueMaxAttempts": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 50,
+          "markdownDescription": "%deepseek-copilot.config.autoContinueMaxAttempts.description%"
+        },
+        "deepseek-copilot.autoContinuePrompt": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%deepseek-copilot.config.autoContinuePrompt.description%"
+        },
+        "deepseek-copilot.autoContinueVerifyCompletion": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "%deepseek-copilot.config.autoContinueVerifyCompletion.description%"
+        },
         "deepseek-copilot.requestHeaders": {
           "type": "object",
           "default": {},

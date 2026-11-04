@@ -1,7 +1,15 @@
 import vscode from 'vscode';
 import { createUserFacingError } from '../client';
+import { getAutoContinueConfig } from '../config';
 import { logger } from '../logger';
-import type { DeepSeekToolCall, DeepSeekUsage } from '../types';
+import type { CompletionSignal, DeepSeekRequest, DeepSeekToolCall, DeepSeekUsage } from '../types';
+import {
+	buildCompletionCheckRequest,
+	buildContinuationRequest,
+	decideContinuation,
+	isCompletionCheckDone,
+	type AutoContinueConfig,
+} from './continuation';
 import { DuplicateContentSuppressor } from './duplicate-content';
 import {
 	observeCancellationToken,
@@ -40,7 +48,7 @@ export interface StreamChatCompletionOptions {
 	setCharsPerToken: (charsPerToken: number) => void;
 }
 
-export function streamChatCompletion({
+export async function streamChatCompletion({
 	prepared,
 	progress,
 	token,
@@ -64,11 +72,16 @@ export function streamChatCompletion({
 	const duplicateSuppressor = prepared.filterLeakedMarkers
 		? new DuplicateContentSuppressor(() => state.accumulatedReasoning, prepared.isThinkingModel)
 		: undefined;
+	const autoContinue = getAutoContinueConfig();
+	const canAutoContinue = autoContinue.enabled && prepared.requestKind === 'main-agent';
+
+	let visibleText = '';
 
 	const reportContent = (content: string): void => {
 		if (!content) {
 			return;
 		}
+		visibleText += content;
 		reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
 		progress.report(new vscode.LanguageModelTextPart(content));
 	};
@@ -78,75 +91,232 @@ export function streamChatCompletion({
 		reportContent(contentFilter ? contentFilter.push(deduplicated) : deduplicated);
 	};
 
-	return prepared.client
-		.streamChatCompletion(
-			prepared.request,
+	try {
+		let request = prepared.request;
+		let attempt = 0;
+
+		for (;;) {
+			let toolCallsThisAttempt = 0;
+			let signal: CompletionSignal | undefined;
+
+			await prepared.client.streamChatCompletion(
+				request,
+				{
+					onContent: handleContent,
+
+					onThinking: (text: string) => {
+						reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
+						handleThinking(thinkingFilter ? thinkingFilter.push(text) : text, state, progress);
+					},
+
+					onToolCall: (toolCall: DeepSeekToolCall) => {
+						toolCallsThisAttempt += 1;
+						reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
+						handleToolCall(toolCall, state, progress, Boolean(contentFilter));
+					},
+
+					onError: (error: Error) => {
+						throw createUserFacingError(error);
+					},
+
+					onDone: (completionSignal?: CompletionSignal) => {
+						signal = completionSignal;
+					},
+
+					onUsage: (usage) => {
+						const charsPerToken = prepared.hasNativeImages
+							? getCharsPerToken()
+							: updateCharsPerToken(prepared.totalRequestChars, usage, getCharsPerToken());
+						if (!prepared.hasNativeImages) {
+							setCharsPerToken(charsPerToken);
+						}
+						prepared.cacheDiagnostics.onUsage(usage, charsPerToken);
+						reportCopilotContextUsage(progress, usage, prepared.requestKind);
+					},
+				},
+				token,
+			);
+
+			const verificationSaidContinue = await shouldVerifyCompletion(
+				prepared,
+				request,
+				visibleText,
+				signal,
+				canAutoContinue,
+				autoContinue,
+				attempt,
+				toolCallsThisAttempt,
+				token,
+			);
+
+			const decision = decideContinuation({
+				config: autoContinue,
+				signal,
+				attempt,
+				emittedToolCalls: toolCallsThisAttempt,
+				cancelled: token.isCancellationRequested,
+				verificationSaidContinue,
+			});
+
+			if (!decision.continue || !canAutoContinue) {
+				logContinuationDecision(prepared, decision.reason, attempt);
+				break;
+			}
+
+			attempt += 1;
+			logContinuation(prepared, attempt, visibleText.length);
+			request = buildContinuationRequest(prepared.request, visibleText, autoContinue.prompt);
+		}
+
+		flushFilters(prepared, {
+			duplicateSuppressor,
+			contentFilter,
+			thinkingFilter,
+			handleContent,
+			handleThinking: (text) => handleThinking(text, state, progress),
+			state,
+			progress,
+		});
+
+		reportInitialResponseNoticeIfPending(progress, state, initialResponseNotice);
+		if (token.isCancellationRequested) {
+			reportSkippedReplayMarkerIfNeeded(prepared, state, 'cancelled');
+		} else {
+			reportReplayMarkerOnce(prepared, progress, state, 'done');
+		}
+		finalizeReplayDiagnostics(prepared.trailingToolResultIds, state, prepared.cacheDiagnostics);
+	} catch (error) {
+		reportSkippedReplayMarkerIfNeeded(
+			prepared,
+			state,
+			token.isCancellationRequested ? 'cancelled' : 'stream-error',
+			error,
+		);
+		throw error;
+	} finally {
+		cancelListener.dispose();
+	}
+}
+
+/** Run the optional "is the task finished?" check before stopping a clean answer. */
+async function shouldVerifyCompletion(
+	prepared: PreparedChatRequest,
+	request: DeepSeekRequest,
+	partialText: string,
+	signal: CompletionSignal | undefined,
+	canAutoContinue: boolean,
+	config: AutoContinueConfig,
+	attempt: number,
+	toolCallsThisAttempt: number,
+	token: vscode.CancellationToken,
+): Promise<boolean> {
+	if (
+		!canAutoContinue ||
+		!config.verifyCompletion ||
+		signal?.truncated ||
+		toolCallsThisAttempt > 0 ||
+		attempt >= config.maxAttempts ||
+		token.isCancellationRequested ||
+		!partialText.trim()
+	) {
+		return false;
+	}
+
+	let reply = '';
+	try {
+		await prepared.client.streamChatCompletion(
+			buildCompletionCheckRequest(request, partialText),
 			{
-				onContent: handleContent,
-
-				onThinking: (text: string) => {
-					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-					handleThinking(thinkingFilter ? thinkingFilter.push(text) : text, state, progress);
+				onContent: (text: string) => {
+					reply += text;
 				},
-
-				onToolCall: (toolCall: DeepSeekToolCall) => {
-					reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-					handleToolCall(toolCall, state, progress, Boolean(contentFilter));
-				},
-
+				onThinking: () => {},
+				onToolCall: () => {},
 				onError: (error: Error) => {
-					throw createUserFacingError(error);
+					throw error;
 				},
-
-				onDone: () => {
-					const duplicateTail = duplicateSuppressor?.flush() ?? '';
-					if (duplicateTail) {
-						handleContent(duplicateTail);
-					}
-					reportContent(contentFilter?.flush() ?? '');
-					const trailingThinking = thinkingFilter?.flush() ?? '';
-					if (trailingThinking) {
-						handleThinking(trailingThinking, state, progress);
-					}
-					logStrippedMarkers(prepared, contentFilter, thinkingFilter);
-					reportReplayMarkerOnce(prepared, progress, state, 'done');
-					finalizeReplayDiagnostics(
-						prepared.trailingToolResultIds,
-						state,
-						prepared.cacheDiagnostics,
-					);
-				},
-
-				onUsage: (usage) => {
-					const charsPerToken = prepared.hasNativeImages
-						? getCharsPerToken()
-						: updateCharsPerToken(prepared.totalRequestChars, usage, getCharsPerToken());
-					if (!prepared.hasNativeImages) {
-						setCharsPerToken(charsPerToken);
-					}
-					prepared.cacheDiagnostics.onUsage(usage, charsPerToken);
-					reportCopilotContextUsage(progress, usage, prepared.requestKind);
-				},
+				onDone: () => {},
 			},
 			token,
-		)
-		.then(undefined, (error) => {
-			reportSkippedReplayMarkerIfNeeded(
-				prepared,
-				state,
-				token.isCancellationRequested ? 'cancelled' : 'stream-error',
-				error,
-			);
-			throw error;
-		})
-		.then(() => {
-			if (token.isCancellationRequested) {
-				reportSkippedReplayMarkerIfNeeded(prepared, state, 'cancelled');
-			}
-		})
-		.finally(() => {
-			cancelListener.dispose();
-		});
+		);
+	} catch (error) {
+		// Fail open: a broken check must not keep the conversation looping.
+		logger.warn(formatRequestLogLine(prepared.requestKind, 'completion check failed'), error);
+		return false;
+	}
+
+	const done = isCompletionCheckDone(reply);
+	logger.debug(
+		formatRequestLogLine(
+			prepared.requestKind,
+			`completion check: ${done ? 'done' : 'continue'} (${reply.trim().slice(0, 40)})`,
+		),
+	);
+	return !done;
+}
+
+function flushFilters(
+	prepared: PreparedChatRequest,
+	context: {
+		duplicateSuppressor: DuplicateContentSuppressor | undefined;
+		contentFilter: LeakedMarkerFilter | undefined;
+		thinkingFilter: LeakedMarkerFilter | undefined;
+		handleContent: (content: string) => void;
+		handleThinking: (text: string) => void;
+		state: ResponseStreamState;
+		progress: vscode.Progress<vscode.LanguageModelResponsePart>;
+	},
+): void {
+	const duplicateTail = context.duplicateSuppressor?.flush() ?? '';
+	if (duplicateTail) {
+		context.handleContent(duplicateTail);
+	}
+	const contentTail = context.contentFilter?.flush() ?? '';
+	if (contentTail) {
+		context.handleContent(contentTail);
+	}
+	const thinkingTail = context.thinkingFilter?.flush() ?? '';
+	if (thinkingTail) {
+		context.handleThinking(thinkingTail);
+	}
+	logStrippedMarkers(prepared, context.contentFilter, context.thinkingFilter);
+}
+
+function logContinuation(
+	prepared: PreparedChatRequest,
+	attempt: number,
+	visibleChars: number,
+): void {
+	logger.info(
+		formatRequestLogLine(
+			prepared.requestKind,
+			`output looked truncated after ${visibleChars} chars; continuing (attempt ${attempt})`,
+		),
+	);
+}
+
+function logContinuationDecision(
+	prepared: PreparedChatRequest,
+	reason: string,
+	attempt: number,
+): void {
+	if (attempt === 0) {
+		return;
+	}
+	logger.info(
+		formatRequestLogLine(
+			prepared.requestKind,
+			`auto-continue stopped: ${reason} after ${attempt} attempt(s)`,
+		),
+	);
+}
+
+function reportInitialResponseNoticeIfPending(
+	progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+	state: ResponseStreamState,
+	initialResponseNotice: string | undefined,
+): void {
+	reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
 }
 
 function logStrippedMarkers(

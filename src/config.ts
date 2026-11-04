@@ -1,5 +1,6 @@
 import vscode from 'vscode';
 import { CONFIG_SECTION } from './consts';
+import { DEFAULT_CONTINUATION_PROMPT } from './provider/continuation';
 
 export type DebugMode = 'minimal' | 'metadata' | 'verbose';
 
@@ -67,6 +68,29 @@ export function getFilterLeakedMarkersEnabled(): boolean {
 		return configured;
 	}
 	return config.get<boolean>('stripThinkingTags', true);
+}
+
+/**
+ * Auto-continue settings.
+ *
+ * Some gateways cut the response short without a terminator, which leaves the answer
+ * half-written and forces the user to type "continue". When enabled, the provider detects
+ * that and resumes the answer inside the same reply.
+ */
+export function getAutoContinueConfig(): {
+	enabled: boolean;
+	maxAttempts: number;
+	prompt: string;
+	verifyCompletion: boolean;
+} {
+	const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+	const maxAttempts = config.get<number>('autoContinueMaxAttempts', 5);
+	return {
+		enabled: config.get<boolean>('autoContinue', true),
+		maxAttempts: Math.max(1, Math.min(50, Math.floor(maxAttempts))),
+		prompt: config.get<string>('autoContinuePrompt', '').trim() || DEFAULT_CONTINUATION_PROMPT,
+		verifyCompletion: config.get<boolean>('autoContinueVerifyCompletion', false),
+	};
 }
 
 /**

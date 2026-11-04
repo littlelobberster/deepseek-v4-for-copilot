@@ -74,6 +74,7 @@ export class DeepSeekClient {
 			const decoder = new TextDecoder();
 			let buffer = '';
 			let latestUsage: DeepSeekUsage | undefined;
+			let finishReason: string | null = null;
 
 			// Accumulate tool call deltas by index, then emit on finish_reason=stop/tool_calls
 			const pendingToolCalls = new Map<number, DeepSeekToolCall>();
@@ -108,7 +109,11 @@ export class DeepSeekClient {
 						}
 						pendingToolCalls.clear();
 						reportFinalUsage(callbacks, latestUsage);
-						callbacks.onDone();
+						callbacks.onDone({
+							finishReason,
+							completed: true,
+							truncated: finishReason === 'length',
+						});
 						return;
 					}
 
@@ -166,6 +171,9 @@ export class DeepSeekClient {
 						}
 
 						// Flush pending tool calls on finish
+						if (choice.finish_reason) {
+							finishReason = choice.finish_reason;
+						}
 						if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop') {
 							for (const tc of pendingToolCalls.values()) {
 								callbacks.onToolCall(tc);
@@ -179,7 +187,12 @@ export class DeepSeekClient {
 			}
 
 			reportFinalUsage(callbacks, latestUsage);
-			callbacks.onDone();
+			// The reader ended without `[DONE]`: a gateway that cuts the stream leaves it open.
+			callbacks.onDone({
+				finishReason,
+				completed: finishReason !== null,
+				truncated: finishReason === null || finishReason === 'length',
+			});
 		} catch (error) {
 			if (isAbortError(error) && cancellationToken?.isCancellationRequested) {
 				return;
@@ -218,7 +231,16 @@ export class DeepSeekClient {
 			return;
 		}
 
-		const payload = (await response.json()) as DeepSeekCompletionResponse;
+		let payload: DeepSeekCompletionResponse;
+		try {
+			payload = (await response.json()) as DeepSeekCompletionResponse;
+		} catch (error) {
+			// A cut-off response body is invalid JSON. Treat it as a truncated completion so
+			// auto-continue can pick up where the output stopped instead of failing the turn.
+			logger.warn('Non-streaming response body was not valid JSON; treating as truncated', error);
+			callbacks.onDone({ finishReason: null, completed: false, truncated: true });
+			return;
+		}
 		const choice = payload.choices?.[0];
 		if (!choice) {
 			throw new Error('No completion choices received');
@@ -246,7 +268,12 @@ export class DeepSeekClient {
 		}
 
 		reportFinalUsage(callbacks, payload.usage);
-		callbacks.onDone();
+		const finishReason = choice.finish_reason ?? null;
+		callbacks.onDone({
+			finishReason,
+			completed: true,
+			truncated: finishReason === 'length',
+		});
 	}
 
 	private createHeaders(): Headers {
