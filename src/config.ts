@@ -82,6 +82,7 @@ export function getAutoContinueConfig(): {
 	maxAttempts: number;
 	prompt: string;
 	verifyCompletion: boolean;
+	verifyOnlyWhenUnfinished: boolean;
 } {
 	const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
 	const maxAttempts = config.get<number>('autoContinueMaxAttempts', 5);
@@ -90,6 +91,7 @@ export function getAutoContinueConfig(): {
 		maxAttempts: Math.max(1, Math.min(50, Math.floor(maxAttempts))),
 		prompt: config.get<string>('autoContinuePrompt', '').trim() || DEFAULT_CONTINUATION_PROMPT,
 		verifyCompletion: config.get<boolean>('autoContinueVerifyCompletion', false),
+		verifyOnlyWhenUnfinished: config.get<boolean>('autoContinueVerifyOnlyWhenUnfinished', false),
 	};
 }
 

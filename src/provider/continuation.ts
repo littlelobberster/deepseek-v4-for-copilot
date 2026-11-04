@@ -13,6 +13,13 @@ export interface AutoContinueConfig {
 	maxAttempts: number;
 	prompt: string;
 	verifyCompletion: boolean;
+	/**
+	 * Only run the completion check when the answer looks cut off.
+	 *
+	 * Off keeps the original behaviour: every completed answer is checked once. On saves a
+	 * request on ordinary answers at the cost of missing a cut-off that reads as complete.
+	 */
+	verifyOnlyWhenUnfinished: boolean;
 }
 
 export interface ContinuationDecision {

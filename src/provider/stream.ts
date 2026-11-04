@@ -222,8 +222,8 @@ async function shouldVerifyCompletion(
 		attempt >= config.maxAttempts ||
 		token.isCancellationRequested ||
 		!partialText.trim() ||
-		// Only spend a request when the answer actually looks cut off.
-		!looksUnfinished(partialText)
+		// When gated, only spend a request if the answer actually looks cut off.
+		(config.verifyOnlyWhenUnfinished && !looksUnfinished(partialText))
 	) {
 		return false;
 	}

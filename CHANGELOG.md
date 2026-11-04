@@ -17,6 +17,7 @@
 * **provider:** suppress reasoning that gateways repeat into the reply body with no tags: while the body still matches the reasoning already received it is withheld, then released as soon as it diverges, so duplicated thinking no longer appears as the answer (measured on real sessions: 76 of 1,082 such replies suppressed, none of the other 1,006 altered)
 * **provider:** add auto-continue: when a gateway cuts a reply short (stream ended without a terminator, truncated JSON, or `finish_reason: length`), the answer resumes inside the same reply instead of waiting for the user to type "continue". Bounded by `deepseek-copilot.autoContinueMaxAttempts`, skipped after tool calls, aborted on cancellation, and optionally gated by a `DONE`/`CONTINUE` completion check
 * **provider:** keep the optional completion check nearly free: it now runs only when an answer looks cut off (unclosed code block, trailing comma/colon/ellipsis/bracket) and never for a response that is already known to be truncated, so a normal finished reply costs no extra request
+* **config:** make that gating a separate switch, `deepseek-copilot.autoContinueVerifyOnlyWhenUnfinished` (default off). The default keeps the previous unconditional check, so `autoContinueVerifyCompletion` alone behaves exactly as before
 
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 
