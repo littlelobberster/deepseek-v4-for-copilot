@@ -243,7 +243,13 @@ export class DeepSeekClient {
 		}
 		const choice = payload.choices?.[0];
 		if (!choice) {
-			throw new Error('No completion choices received');
+			// A gateway that answered with 0 tokens can return no choices at all. Retry it as an
+			// empty response instead of failing the turn.
+			logger.warn(
+				'Non-streaming response contained no completion choices; treating as an empty response',
+			);
+			callbacks.onDone({ finishReason: null, completed: true, truncated: true });
+			return;
 		}
 
 		const message = choice.message;
