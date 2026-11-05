@@ -42,9 +42,17 @@ const SCAFFOLDING_TAGS = new Set([
 	'plan',
 ]);
 
-const SPECIAL_TOKEN_PATTERN = /^<\/?[|｜][^<>\n]{1,60}>/; // Tolerate spacing variants such as `</ summary>` that gateways emit.
+const SPECIAL_TOKEN_PATTERN = /^<\/?[|｜][^<>\n]{1,60}>/;
+/**
+ * A special token whose closing `>` never arrived.
+ *
+ * Gateways cut the stream while still writing their own tool-call wrapper, so this is
+ * either an in-progress token or the tail of a truncated one. Either way it is control
+ * markup, never answer text, so it is held back and finally dropped.
+ */
+const SPECIAL_TOKEN_FRAGMENT_PATTERN = /^<\/?[|｜][^<>\n]*$/;
+// Tolerate spacing variants such as `</ summary>` that gateways emit.
 const TAG_PATTERN = /^<\s*(\/?)\s*([A-Za-z][\w.-]{0,40})(\s[^<>\n]{0,80})?>/;
-const SPECIAL_TOKEN_START_PATTERN = /^<\/?[|｜][^<>\n]{0,60}$/;
 const FENCE_LINE_PATTERN = /^ {0,3}(`{3,}|~{3,})/;
 const FENCE_PREFIX_PATTERN = /^ {0,3}[`~]{0,2}$/;
 // Only `//` style comments are protected. Markdown headings (`#`) and bullets (`*`) are
@@ -87,7 +95,7 @@ export function stripLeakedMarkers(text: string, options: LeakedMarkerFilterOpti
 }
 
 const TRAILING_MARKER_PATTERN =
-	/(?:<\s*\/?\s*(?:thinking|thought|think|analytical|analytic|reasoning|reasoning_scratchpad|visual_thinking|summary|now|content|status|invoke|review_begin|clarification|query|analysis|scratchpad|plan)\b[^<>\n]{0,80}>|<\s*\/?\s*[|｜][^<>\n]{1,60}>)$/i;
+	/(?:<\s*\/?\s*(?:thinking|thought|think|analytical|analytic|reasoning|reasoning_scratchpad|visual_thinking|summary|now|content|status|invoke|review_begin|clarification|query|analysis|scratchpad|plan)\b[^<>\n]{0,80}>|<\s*\/?\s*[|｜][^<>\n]{1,60}>|<\s*\/?\s*[|｜][^<>\n]*)$/i;
 
 /**
  * Strip marker tags that leaked onto the **end** of a value.
@@ -125,6 +133,24 @@ export function stripTrailingMarkers(text: string): string {
 		return text;
 	}
 	return endsWithNewline && body ? `${body}\n` : body;
+}
+
+/**
+ * Whether leaked markup is *still open* at the end of a reply.
+ *
+ * When a gateway is cut off while writing its own tool-call wrapper it emits something
+ * like `</｜｜DSML｜｜ invoke` and then stops. That fragment is control markup, and its
+ * presence proves the reply is incomplete even though it arrived with a normal finish
+ * reason, so auto-continue can resume it instead of ending the turn.
+ */
+const TRAILING_OPEN_MARKUP_PATTERN =
+	/(?:<\s*\/?\s*[|｜][^<>\n]*|<\s*\/?\s*(?:invoke|parameter|tool_call|function_call)s?\b[^<>\n]*)$/i;
+
+export function endsInsideToolCallMarkup(text: string): boolean {
+	if (!text) {
+		return false;
+	}
+	return TRAILING_OPEN_MARKUP_PATTERN.test(text.slice(-512));
 }
 
 function lastLineOf(text: string): string {
@@ -376,6 +402,14 @@ export function createLeakedMarkerFilter(
 					continue;
 				}
 
+				// The stream ended inside a special token: the gateway was cut off while writing
+				// its own control markup. Never show that markup as if it were the answer.
+				if (final && SPECIAL_TOKEN_FRAGMENT_PATTERN.test(pending)) {
+					drop(pending.length);
+					pending = '';
+					return out.join('');
+				}
+
 				// HTML comments are real content: emit them verbatim and do not filter inside.
 				if (pending.startsWith('<!--')) {
 					const commentEnd = pending.indexOf('-->');
@@ -548,7 +582,7 @@ function couldBecomeMarkup(text: string): boolean {
 	if (!text.startsWith('<')) {
 		return false;
 	}
-	if (SPECIAL_TOKEN_START_PATTERN.test(text)) {
+	if (SPECIAL_TOKEN_FRAGMENT_PATTERN.test(text)) {
 		return true;
 	}
 	if (text.includes('>')) {

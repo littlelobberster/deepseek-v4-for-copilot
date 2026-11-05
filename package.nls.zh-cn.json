@@ -23,7 +23,7 @@
   "deepseek-copilot.config.stripThinkingTags.description": "移除部分第三方 API 网关泄漏到回复正文里的 `<thinking>...</thinking>` 标签块（这些网关没有把它们放到独立的推理通道）。移除后可见回复保持干净，标签也不会再被当作对话上下文反复重放。如需查看原始输出（例如在讨论这类标记时），可关闭此项。",
   "deepseek-copilot.config.stripThinkingTags.deprecation": "已重命名为 `deepseek-copilot.filterLeakedMarkers`，新键同时覆盖 `<summary>` 与特殊 token。",
   "deepseek-copilot.config.filterLeakedMarkers.description": "移除第三方 API 网关泄漏到模型回复里的控制标记：`<thinking>` 块、独占一行或位于行尾的 `<summary>` 标签，以及 `<|…|>`/`<｜…｜>` 特殊 token。围栏代码块与行内代码永远不会被改动，C# 的 `/// <summary>` 注释和 HTML 的 `<details><summary>` 标记也会保留。如需查看原始输出（例如在讨论这类标记时），可关闭此项。",
-  "deepseek-copilot.config.autoContinue.description": "回复被截断时自动续写。部分中转站会在没有结束标记的情况下断开，或因达到 token 上限而中止；此时插件会在同一条回复里继续生成，无需你手动输入「继续」。空响应（0 输出 token）无论其他开关如何都会自动重试。仅在响应确实像被截断时触发，有工具调用时不触发（由宿主接着跑），你点停止会立即中止。每次续写都会重发对话，因此会额外消耗 token。",
+  "deepseek-copilot.config.autoContinue.description": "回复被截断时自动续写。部分中转站会在没有结束标记的情况下断开、达到 token 上限，或在写自己的工具调用标记时被切断；此时插件会在同一条回复里继续生成，无需你手动输入「继续」。空响应（0 输出 token）无论其他开关如何都会自动重试。仅在响应确实像被截断时触发，有工具调用时不触发（由宿主接着跑），你点停止会立即中止。只对真实对话生效，不作用于标题、提交信息等辅助请求。每次续写都会重发对话，因此会额外消耗 token。",
   "deepseek-copilot.config.autoContinueMaxAttempts.description": "单条回复最多自动续写几次。用于限制中转站反复截断时的额外请求数量。",
   "deepseek-copilot.config.autoContinuePrompt.description": "续写时发送的指令。留空则使用内置措辞（从停止处继续、不要重复已写内容）。",
   "deepseek-copilot.config.autoContinueVerifyCompletion.description": "停止前询问模型任务是否真的完成（只回 DONE 或 CONTINUE），若回答 CONTINUE 则继续生成。每条完成的回答最多询问一次，且对已判定为截断的响应不再询问（直接续写）。这会让每条完成的回答多一次请求；可与 `autoContinueVerifyOnlyWhenUnfinished` 搭配，只在回答看起来没写完时才花这次请求。",

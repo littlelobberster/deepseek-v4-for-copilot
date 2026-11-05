@@ -111,7 +111,7 @@ API Key 存储在 VS Code 的 `SecretStorage` 中（macOS 钥匙串 / Windows �
 | `deepseek-copilot.maxTokens` | `0` | 最大输出 Token 数（`0` = API 默认值）。可用于成本控制 |
 | `deepseek-copilot.nonStreaming` | `false` | 使用 `stream: false` 非流式请求。模型生成完成后一次返回完整响应，等待期间界面不显示内容 |
 | `deepseek-copilot.filterLeakedMarkers` | `true` | 移除第三方网关泄漏到回复里的控制标记：`<thinking>` 块、独占一行或位于行尾的 `<summary>` 标签、以及 `<\|…\|>`/`<｜…｜>` 特殊 token。围栏代码与行内代码不会被改动，因此 C# 的 `/// <summary>` 注释和 HTML 的 `<details><summary>` 标记会保留 |
-| `deepseek-copilot.autoContinue` | `true` | 回复被截断时自动续写（流没有结束标记，或达到 token 上限），无需手动输入「继续」。空响应（0 输出 token）无论其他开关如何都会自动重试。有工具调用时不触发，点停止会立即中止。每次续写都会重发对话，会额外消耗 token |
+| `deepseek-copilot.autoContinue` | `true` | 回复被截断时自动续写（流没有结束标记、达到 token 上限，或回复停在中转站的工具调用标记里），无需手动输入「继续」。空响应（0 输出 token）无论其他开关如何都会自动重试。有工具调用时不触发，点停止会立即中止。只对真实对话生效，不作用于标题、提交信息等辅助请求。每次续写都会重发对话，会额外消耗 token |
 | `deepseek-copilot.autoContinueMaxAttempts` | `5` | 单条回复最多自动续写几次 |
 | `deepseek-copilot.autoContinuePrompt` | *(内置)* | 续写时发送的指令 |
 | `deepseek-copilot.autoContinueVerifyCompletion` | `false` | 停止前询问模型任务是否真的完成（`DONE`/`CONTINUE`），若回 `CONTINUE` 则继续。每条完成的回答多一次请求 |

@@ -25,9 +25,10 @@ import {
 	type ReplayMarkerMetadata,
 } from './replay';
 import type { PreparedChatRequest } from './request';
-import { formatRequestLogLine, type RequestKind } from './routing';
+import { formatRequestLogLine, isAuxiliaryRequestKind, type RequestKind } from './routing';
 import {
 	createLeakedMarkerFilter,
+	endsInsideToolCallMarkup,
 	stripLeakedMarkers,
 	stripTrailingMarkers,
 	type LeakedMarkerFilter,
@@ -41,6 +42,9 @@ interface ResponseStreamState {
 }
 
 const COPILOT_USAGE_DATA_PART_MIME = 'usage';
+
+/** How much raw content to keep for detecting a reply cut off inside gateway markup. */
+const RAW_TAIL_CHARS = 1024;
 
 export interface StreamChatCompletionOptions {
 	prepared: PreparedChatRequest;
@@ -84,14 +88,18 @@ export async function streamChatCompletion({
 		? new DuplicateContentSuppressor(() => state.accumulatedReasoning, prepared.isThinkingModel)
 		: undefined;
 	const autoContinue = getAutoContinueConfig();
-	const canAutoContinue = autoContinue.enabled && prepared.requestKind === 'main-agent';
-	const runningIndicator =
-		prepared.requestKind === 'main-agent' ? beginRunningIndicator() : undefined;
+	// Auto-continue applies to real work, not to the short auxiliary completions VS Code
+	// issues for titles, commit messages and the like.
+	const isAuxiliaryRequest = isAuxiliaryRequestKind(prepared.requestKind);
+	const canAutoContinue = autoContinue.enabled && !isAuxiliaryRequest;
+	const runningIndicator = isAuxiliaryRequest ? undefined : beginRunningIndicator();
 
 	let visibleText = '';
 	// Characters the gateway actually sent, before any filtering. Filters buffer text while a
 	// tag may still be incomplete, so emitted text alone cannot tell an empty response apart.
 	let receivedChars = 0;
+	// Tail of the raw content stream, used to recognise a reply cut off inside gateway markup.
+	let receivedTail = '';
 
 	const reportContent = (content: string): void => {
 		if (!content) {
@@ -111,6 +119,7 @@ export async function streamChatCompletion({
 
 	const handleContent = (content: string): void => {
 		receivedChars += content.length;
+		receivedTail = (receivedTail + content).slice(-RAW_TAIL_CHARS);
 		pushThroughContentFilter(duplicateSuppressor ? duplicateSuppressor.push(content) : content);
 	};
 
@@ -181,11 +190,19 @@ export async function streamChatCompletion({
 				token,
 			);
 
+			// A reply that stops inside gateway tool-call markup (`</｜｜DSML｜｜ invoke`) is cut
+			// off even when the response claims to be complete: the model was still writing the
+			// call. Resume it instead of ending the turn with a stray marker.
+			const endedInsideMarkup = endsInsideToolCallMarkup(receivedTail);
+			const effectiveSignal: CompletionSignal | undefined = endedInsideMarkup
+				? { finishReason: signal?.finishReason ?? null, completed: false, truncated: true }
+				: signal;
+
 			const verificationSaidContinue = await shouldVerifyCompletion(
 				prepared,
 				request,
 				visibleText,
-				signal,
+				effectiveSignal,
 				canAutoContinue,
 				autoContinue,
 				attempt,
@@ -195,7 +212,7 @@ export async function streamChatCompletion({
 
 			const decision = decideContinuation({
 				config: autoContinue,
-				signal,
+				signal: effectiveSignal,
 				attempt,
 				emittedToolCalls: toolCallsThisAttempt,
 				cancelled: token.isCancellationRequested,
@@ -212,7 +229,13 @@ export async function streamChatCompletion({
 			// Emit whatever the previous attempt had buffered, so the answer stays contiguous.
 			flushFilters();
 			startNextAttempt();
-			logContinuation(prepared, attempt, decision.reason, visibleText.length);
+			receivedTail = '';
+			logContinuation(
+				prepared,
+				attempt,
+				endedInsideMarkup ? 'markup-truncated' : decision.reason,
+				visibleText.length,
+			);
 			request = buildContinuationRequest(
 				prepared.request,
 				visibleText,
@@ -309,13 +332,14 @@ function logContinuation(
 	reason: string,
 	visibleChars: number,
 ): void {
+	const detail =
+		reason === 'empty-response'
+			? 'empty response from the gateway'
+			: reason === 'markup-truncated'
+				? `reply stopped inside gateway tool-call markup after ${visibleChars} chars`
+				: `output looked truncated after ${visibleChars} chars`;
 	logger.info(
-		formatRequestLogLine(
-			prepared.requestKind,
-			reason === 'empty-response'
-				? `empty response from the gateway; retrying (attempt ${attempt})`
-				: `output looked truncated after ${visibleChars} chars; continuing (attempt ${attempt})`,
-		),
+		formatRequestLogLine(prepared.requestKind, `${detail}; continuing (attempt ${attempt})`),
 	);
 }
 

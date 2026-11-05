@@ -9,6 +9,9 @@
 
 ### Bug Fixes
 
+* **provider:** auto-continue (and the running indicator) were gated on the request being classified as `main-agent`, which real conversations never are: the classifier keys off the system prompt text, and current VS Code labels a real agent turn `background`. Truncation therefore was never handled. Both now apply to every request that is not a short auxiliary completion (chat title, commit message, branch name, rename suggestions, prompt categorisation, todo tracking, settings resolution)
+* **provider:** treat a reply that stops inside gateway tool-call markup as truncated: a stream cut while the gateway was writing `</｜｜DSML｜｜ invoke` used to arrive with a normal finish reason, so the turn ended with the raw marker as the answer. The fragment is now dropped and the reply is resumed
+* **provider:** drop an unterminated special token at the end of a stream instead of emitting it, and never let an in-progress special token be shown as text
 * **vision:** reuse image descriptions across requests instead of calling the vision model again for every turn when the host does not replay `toolVision` marker metadata
 * **provider:** strip control markup that third-party gateways leak into replies: `<thinking>`/`<thought>`/`<analytic>` reasoning blocks, `<summary>`/`<now>`/`<content>`/`<status>` scaffolding tags, fabricated tool-call wrappers, and `<|…|>`/`<｜…｜>` special tokens. Fenced code blocks and inline code are never modified, so C# doc comments and HTML `<details><summary>` markup keep working; markdown headings and bullets are filtered too, and spacing variants such as `</ summary>` are recognised. Controlled by `deepseek-copilot.filterLeakedMarkers` (replaces `stripThinkingTags`, which is still read as a fallback)
 * **provider:** recover tool calls whose JSON arguments have leaked markup appended, so the call is no longer dropped as unparsable (a common cause of a turn ending early)

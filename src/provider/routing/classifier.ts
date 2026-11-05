@@ -56,6 +56,23 @@ export function shouldForceThinkingNone(requestKind: RequestKind): boolean {
 	return REQUEST_KINDS_WITH_FORCED_NONE_THINKING.has(requestKind);
 }
 
+/**
+ * Whether a request is a cheap auxiliary completion rather than real assistant work.
+ *
+ * Those are the short one-shot requests VS Code issues for titles, commit messages,
+ * branch names, rename suggestions and prompt categorisation. Auto-continue and the
+ * running indicator must not apply to them: resuming a title wastes a request, and the
+ * indicator would flash for work the user never started.
+ *
+ * Everything else counts as real work, including `background` and `unknown`: the request
+ * classifier keys off the system prompt text, which changes between VS Code releases, so
+ * a genuine agent turn is often labelled `background`. Gating on `main-agent` therefore
+ * disabled auto-continue for every real conversation.
+ */
+export function isAuxiliaryRequestKind(requestKind: RequestKind): boolean {
+	return REQUEST_KINDS_WITH_FORCED_NONE_THINKING.has(requestKind);
+}
+
 export function classifyProviderRequest(input: {
 	messages: readonly vscode.LanguageModelChatRequestMessage[];
 	tools?: readonly vscode.LanguageModelChatTool[];
