@@ -24,10 +24,21 @@ export interface AutoContinueConfig {
 
 export interface ContinuationDecision {
 	continue: boolean;
-	reason: 'disabled' | 'cancelled' | 'complete' | 'tool-calls' | 'max-attempts' | 'truncated';
+	reason:
+		| 'disabled'
+		| 'cancelled'
+		| 'complete'
+		| 'tool-calls'
+		| 'max-attempts'
+		| 'truncated'
+		| 'empty-response';
 }
 
-/** Whether a truncated (or unfinished) response should be continued automatically. */
+/** Nudge used when the model produced nothing at all (0 input / 0 output tokens). */
+export const EMPTY_RESPONSE_PROMPT =
+	'Your previous attempt returned no output at all. Please answer the request now.';
+
+/** Whether a truncated (or empty, or unfinished) response should be continued automatically. */
 export function decideContinuation(input: {
 	config: AutoContinueConfig;
 	signal: CompletionSignal | undefined;
@@ -35,6 +46,8 @@ export function decideContinuation(input: {
 	emittedToolCalls: number;
 	cancelled: boolean;
 	verificationSaidContinue: boolean;
+	/** False when the attempt produced no text, no reasoning and no tool call. */
+	producedOutput: boolean;
 }): ContinuationDecision {
 	if (!input.config.enabled) {
 		return { continue: false, reason: 'disabled' };
@@ -48,6 +61,11 @@ export function decideContinuation(input: {
 	}
 	if (input.attempt >= input.config.maxAttempts) {
 		return { continue: false, reason: 'max-attempts' };
+	}
+	// Nothing came back at all (the gateway reported 0 input / 0 output tokens): this is
+	// always worth retrying, so it is never gated by the completion-check settings.
+	if (!input.producedOutput) {
+		return { continue: true, reason: 'empty-response' };
 	}
 	if (input.signal?.truncated) {
 		return { continue: true, reason: 'truncated' };

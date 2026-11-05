@@ -111,11 +111,12 @@ API Key 存储在 VS Code 的 `SecretStorage` 中（macOS 钥匙串 / Windows �
 | `deepseek-copilot.maxTokens` | `0` | 最大输出 Token 数（`0` = API 默认值）。可用于成本控制 |
 | `deepseek-copilot.nonStreaming` | `false` | 使用 `stream: false` 非流式请求。模型生成完成后一次返回完整响应，等待期间界面不显示内容 |
 | `deepseek-copilot.filterLeakedMarkers` | `true` | 移除第三方网关泄漏到回复里的控制标记：`<thinking>` 块、独占一行或位于行尾的 `<summary>` 标签、以及 `<\|…\|>`/`<｜…｜>` 特殊 token。围栏代码与行内代码不会被改动，因此 C# 的 `/// <summary>` 注释和 HTML 的 `<details><summary>` 标记会保留 |
-| `deepseek-copilot.autoContinue` | `true` | 回复被截断时自动续写（流没有结束标记，或达到 token 上限），无需手动输入「继续」。有工具调用时不触发，点停止会立即中止。每次续写都会重发对话，会额外消耗 token |
+| `deepseek-copilot.autoContinue` | `true` | 回复被截断时自动续写（流没有结束标记，或达到 token 上限），无需手动输入「继续」。空响应（0 输出 token）无论其他开关如何都会自动重试。有工具调用时不触发，点停止会立即中止。每次续写都会重发对话，会额外消耗 token |
 | `deepseek-copilot.autoContinueMaxAttempts` | `5` | 单条回复最多自动续写几次 |
 | `deepseek-copilot.autoContinuePrompt` | *(内置)* | 续写时发送的指令 |
 | `deepseek-copilot.autoContinueVerifyCompletion` | `false` | 停止前询问模型任务是否真的完成（`DONE`/`CONTINUE`），若回 `CONTINUE` 则继续。每条完成的回答多一次请求 |
 | `deepseek-copilot.autoContinueVerifyOnlyWhenUnfinished` | `false` | 只对看起来没写完的回答做上面的询问（代码块未闭合、以逗号/冒号/省略号/左括号结尾），而不是每条都问 |
+| `deepseek-copilot.showRunningIndicator` | `true` | AI 运行时在状态栏显示蓝色旋转指示器与已用时间。扩展 API 无法装饰聊天输入框，状态栏是唯一能显示实时进度的位置 |
 | `deepseek-copilot.modelIdOverrides` | 预填官方 ID 映射 | 各 DeepSeek 模型入口对应的 API 模型 ID。仅在使用模型名不同的兼容第三方 API 时修改 |
 | `deepseek-copilot.debugMode` | `minimal` | 诊断模式：`minimal` 仅上报 token 用量，`metadata` 输出隐私安全日志，`verbose` 将完整请求 dump 和 pipeline snapshot 写入扩展 global storage。完整 dump 可能包含敏感提示词文本、工具定义、文件片段和图片描述。使用 `DeepSeek: 打开请求 Dump 目录` 打开 dump 位置 |
 | `deepseek-copilot.visionModel` | *(自动)* | V4 Flash 和 Pro 使用的视觉代理。自动模式会在可用时选择 Flash Vision Exp；也可通过 `DeepSeek: 配置视觉代理` 改用其他 VS Code 模型或 API 端点 |

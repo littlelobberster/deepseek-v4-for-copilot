@@ -174,6 +174,11 @@
           "default": false,
           "markdownDescription": "%deepseek-copilot.config.autoContinueVerifyOnlyWhenUnfinished.description%"
         },
+        "deepseek-copilot.showRunningIndicator": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%deepseek-copilot.config.showRunningIndicator.description%"
+        },
         "deepseek-copilot.requestHeaders": {
           "type": "object",
           "default": {},

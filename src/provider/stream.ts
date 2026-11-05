@@ -7,11 +7,13 @@ import {
 	buildCompletionCheckRequest,
 	buildContinuationRequest,
 	decideContinuation,
+	EMPTY_RESPONSE_PROMPT,
 	isCompletionCheckDone,
 	looksUnfinished,
 	type AutoContinueConfig,
 } from './continuation';
 import { DuplicateContentSuppressor } from './duplicate-content';
+import { beginRunningIndicator } from './progress-indicator';
 import {
 	observeCancellationToken,
 	type CacheDiagnosticsRun,
@@ -64,19 +66,32 @@ export async function streamChatCompletion({
 		replayMarkerReported: false,
 	};
 	const cancelListener = observeCancellationToken(token, prepared.cacheDiagnostics);
-	const contentFilter = prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
+	const createContentFilter = (): LeakedMarkerFilter | undefined =>
+		prepared.filterLeakedMarkers ? createLeakedMarkerFilter() : undefined;
 	// The thinking channel already is reasoning: only bare tags are removed there, never text.
-	const thinkingFilter = prepared.filterLeakedMarkers
-		? createLeakedMarkerFilter({ dropReasoningBlocks: false })
-		: undefined;
+	const createThinkingFilter = (): LeakedMarkerFilter | undefined =>
+		prepared.filterLeakedMarkers
+			? createLeakedMarkerFilter({ dropReasoningBlocks: false })
+			: undefined;
+	// Filters are per attempt: a retry starts a fresh response, and keeping the buffers would
+	// merge two attempts into one stream.
+	let contentFilter = createContentFilter();
+	let thinkingFilter = createThinkingFilter();
+	let strippedContentChars = 0;
+	let strippedThinkingChars = 0;
 	// Gateways sometimes repeat the reasoning in the body with no tags; suppress that copy.
 	const duplicateSuppressor = prepared.filterLeakedMarkers
 		? new DuplicateContentSuppressor(() => state.accumulatedReasoning, prepared.isThinkingModel)
 		: undefined;
 	const autoContinue = getAutoContinueConfig();
 	const canAutoContinue = autoContinue.enabled && prepared.requestKind === 'main-agent';
+	const runningIndicator =
+		prepared.requestKind === 'main-agent' ? beginRunningIndicator() : undefined;
 
 	let visibleText = '';
+	// Characters the gateway actually sent, before any filtering. Filters buffer text while a
+	// tag may still be incomplete, so emitted text alone cannot tell an empty response apart.
+	let receivedChars = 0;
 
 	const reportContent = (content: string): void => {
 		if (!content) {
@@ -87,9 +102,39 @@ export async function streamChatCompletion({
 		progress.report(new vscode.LanguageModelTextPart(content));
 	};
 
+	const pushThroughContentFilter = (text: string): void => {
+		if (!text) {
+			return;
+		}
+		reportContent(contentFilter ? contentFilter.push(text) : text);
+	};
+
 	const handleContent = (content: string): void => {
-		const deduplicated = duplicateSuppressor ? duplicateSuppressor.push(content) : content;
-		reportContent(contentFilter ? contentFilter.push(deduplicated) : deduplicated);
+		receivedChars += content.length;
+		pushThroughContentFilter(duplicateSuppressor ? duplicateSuppressor.push(content) : content);
+	};
+
+	const handleThinkingChunk = (text: string): void => {
+		receivedChars += text.length;
+		reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
+		handleThinking(thinkingFilter ? thinkingFilter.push(text) : text, state, progress);
+	};
+
+	const flushFilters = (): void => {
+		pushThroughContentFilter(duplicateSuppressor?.flush() ?? '');
+		reportContent(contentFilter?.flush() ?? '');
+		const thinkingTail = thinkingFilter?.flush() ?? '';
+		if (thinkingTail) {
+			handleThinking(thinkingTail, state, progress);
+		}
+		strippedContentChars += contentFilter?.strippedChars() ?? 0;
+		strippedThinkingChars += thinkingFilter?.strippedChars() ?? 0;
+	};
+
+	const startNextAttempt = (): void => {
+		contentFilter = createContentFilter();
+		thinkingFilter = createThinkingFilter();
+		duplicateSuppressor?.reset();
 	};
 
 	try {
@@ -99,16 +144,14 @@ export async function streamChatCompletion({
 		for (;;) {
 			let toolCallsThisAttempt = 0;
 			let signal: CompletionSignal | undefined;
+			const receivedBefore = receivedChars;
 
 			await prepared.client.streamChatCompletion(
 				request,
 				{
 					onContent: handleContent,
 
-					onThinking: (text: string) => {
-						reportInitialResponseNoticeOnce(progress, state, initialResponseNotice);
-						handleThinking(thinkingFilter ? thinkingFilter.push(text) : text, state, progress);
-					},
+					onThinking: handleThinkingChunk,
 
 					onToolCall: (toolCall: DeepSeekToolCall) => {
 						toolCallsThisAttempt += 1;
@@ -157,6 +200,7 @@ export async function streamChatCompletion({
 				emittedToolCalls: toolCallsThisAttempt,
 				cancelled: token.isCancellationRequested,
 				verificationSaidContinue,
+				producedOutput: receivedChars > receivedBefore || toolCallsThisAttempt > 0,
 			});
 
 			if (!decision.continue || !canAutoContinue) {
@@ -165,22 +209,19 @@ export async function streamChatCompletion({
 			}
 
 			attempt += 1;
-			logContinuation(prepared, attempt, visibleText.length);
-			request = buildContinuationRequest(prepared.request, visibleText, autoContinue.prompt);
-			// The partial answer is now replayed as history, so duplicate suppression starts
-			// fresh: otherwise the suppressed reasoning would be released on the next attempt.
-			duplicateSuppressor?.reset();
+			// Emit whatever the previous attempt had buffered, so the answer stays contiguous.
+			flushFilters();
+			startNextAttempt();
+			logContinuation(prepared, attempt, decision.reason, visibleText.length);
+			request = buildContinuationRequest(
+				prepared.request,
+				visibleText,
+				decision.reason === 'empty-response' ? EMPTY_RESPONSE_PROMPT : autoContinue.prompt,
+			);
 		}
 
-		flushFilters(prepared, {
-			duplicateSuppressor,
-			contentFilter,
-			thinkingFilter,
-			handleContent,
-			handleThinking: (text) => handleThinking(text, state, progress),
-			state,
-			progress,
-		});
+		flushFilters();
+		logStrippedMarkers(prepared, strippedContentChars, strippedThinkingChars);
 
 		reportInitialResponseNoticeIfPending(progress, state, initialResponseNotice);
 		if (token.isCancellationRequested) {
@@ -199,6 +240,7 @@ export async function streamChatCompletion({
 		throw error;
 	} finally {
 		cancelListener.dispose();
+		runningIndicator?.end();
 	}
 }
 
@@ -261,42 +303,18 @@ async function shouldVerifyCompletion(
 	return !done;
 }
 
-function flushFilters(
-	prepared: PreparedChatRequest,
-	context: {
-		duplicateSuppressor: DuplicateContentSuppressor | undefined;
-		contentFilter: LeakedMarkerFilter | undefined;
-		thinkingFilter: LeakedMarkerFilter | undefined;
-		handleContent: (content: string) => void;
-		handleThinking: (text: string) => void;
-		state: ResponseStreamState;
-		progress: vscode.Progress<vscode.LanguageModelResponsePart>;
-	},
-): void {
-	const duplicateTail = context.duplicateSuppressor?.flush() ?? '';
-	if (duplicateTail) {
-		context.handleContent(duplicateTail);
-	}
-	const contentTail = context.contentFilter?.flush() ?? '';
-	if (contentTail) {
-		context.handleContent(contentTail);
-	}
-	const thinkingTail = context.thinkingFilter?.flush() ?? '';
-	if (thinkingTail) {
-		context.handleThinking(thinkingTail);
-	}
-	logStrippedMarkers(prepared, context.contentFilter, context.thinkingFilter);
-}
-
 function logContinuation(
 	prepared: PreparedChatRequest,
 	attempt: number,
+	reason: string,
 	visibleChars: number,
 ): void {
 	logger.info(
 		formatRequestLogLine(
 			prepared.requestKind,
-			`output looked truncated after ${visibleChars} chars; continuing (attempt ${attempt})`,
+			reason === 'empty-response'
+				? `empty response from the gateway; retrying (attempt ${attempt})`
+				: `output looked truncated after ${visibleChars} chars; continuing (attempt ${attempt})`,
 		),
 	);
 }
@@ -327,11 +345,9 @@ function reportInitialResponseNoticeIfPending(
 
 function logStrippedMarkers(
 	prepared: PreparedChatRequest,
-	contentFilter: LeakedMarkerFilter | undefined,
-	thinkingFilter: LeakedMarkerFilter | undefined,
+	contentChars: number,
+	thinkingChars: number,
 ): void {
-	const contentChars = contentFilter?.strippedChars() ?? 0;
-	const thinkingChars = thinkingFilter?.strippedChars() ?? 0;
 	if (contentChars === 0 && thinkingChars === 0) {
 		return;
 	}

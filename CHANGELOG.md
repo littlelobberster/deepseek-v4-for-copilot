@@ -5,6 +5,7 @@
 ### Features
 
 * add `deepseek-copilot.nonStreaming` setting to send `stream: false` requests and dispatch the full response once
+* add `deepseek-copilot.showRunningIndicator` (default on): a blue status bar spinner with the elapsed time while a request is running, so it is visible that the model is still working. Reference counted across overlapping requests, and hidden again when a request throws or is cancelled. An animated ring around the chat input is not possible: the extension API offers no way to decorate it (`chat.requestBorder` is only a theme colour)
 
 ### Bug Fixes
 
@@ -18,6 +19,9 @@
 * **provider:** add auto-continue: when a gateway cuts a reply short (stream ended without a terminator, truncated JSON, or `finish_reason: length`), the answer resumes inside the same reply instead of waiting for the user to type "continue". Bounded by `deepseek-copilot.autoContinueMaxAttempts`, skipped after tool calls, aborted on cancellation, and optionally gated by a `DONE`/`CONTINUE` completion check
 * **provider:** keep the optional completion check nearly free: it now runs only when an answer looks cut off (unclosed code block, trailing comma/colon/ellipsis/bracket) and never for a response that is already known to be truncated, so a normal finished reply costs no extra request
 * **config:** make that gating a separate switch, `deepseek-copilot.autoContinueVerifyOnlyWhenUnfinished` (default off). The default keeps the previous unconditional check, so `autoContinueVerifyCompletion` alone behaves exactly as before
+* **provider:** retry responses that come back completely empty (0 output tokens, a known relay failure) unconditionally: they count as truncated regardless of the completion-check settings, the retry uses a dedicated "your previous attempt returned no output" nudge, and `autoContinueMaxAttempts` still bounds the loop
+* **provider:** tell an empty response apart from a buffered one: "did the gateway send anything" is now measured on the raw stream instead of on emitted text, because the marker filter holds text while a tag may still be incomplete. Previously a reply that arrived entirely inside a leaked reasoning block was retried as empty, and the retries concatenated their discarded text into one duplicated answer
+* **provider:** give each attempt its own marker filters and flush the previous attempt's buffered tail first, so a continuation can no longer merge two responses into one stream
 
 ## [0.9.4](https://github.com/Vizards/deepseek-v4-for-copilot/compare/v0.9.3...v0.9.4) (2026-10-07)
 

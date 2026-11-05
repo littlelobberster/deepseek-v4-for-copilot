@@ -1,6 +1,7 @@
 import vscode from 'vscode';
 import { t } from '../i18n';
 import { logger } from '../logger';
+import { disposeRunningIndicator } from '../provider/progress-indicator';
 import { registerActionUrls } from './actions';
 import { registerCommands } from './commands';
 import { initializeDiagnostics } from './diagnostics';
@@ -29,6 +30,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
 	// VS Code closes extension-host RPC before deactivation; only release local resources here.
+	disposeRunningIndicator();
 	logger.info('Extension deactivated');
 	logger.dispose();
 }

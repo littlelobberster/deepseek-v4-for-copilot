@@ -96,6 +96,14 @@ export function getAutoContinueConfig(): {
 }
 
 /**
+ * Whether to show a status bar indicator while a chat request is running.
+ */
+export function getShowRunningIndicatorEnabled(): boolean {
+	const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+	return config.get<boolean>('showRunningIndicator', true);
+}
+
+/**
  * Diagnostic mode. `verbose` also enables metadata logs.
  *
  * The legacy boolean `debug` setting is still read as a fallback so old
